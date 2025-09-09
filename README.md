@@ -47,15 +47,15 @@ The following tables are required:
 
 ## Expected Results
 
-`cohort_size.txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
+`cohort_size_[SITENAME].txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
 
-`tab1_continuous`: Summary characteristics of included cohort, continuous variables only.
+`tab1_continuous_[SITENAME].csv`: Summary characteristics of included cohort, continuous variables only.
 
-`tab1_categorical`: Summary characteristics of included cohort, categorical variables only.
+`tab1_categorical_[SITENAME].csv`: Summary characteristics of included cohort, categorical variables only.
 
-`tab1_continuous_comparisons`: Pairwise comparisons with post-hoc correction of continuous variables.
+`tab1_continuous_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of continuous variables.
 
-`tab1_categorical_comparisons`: Pairwise comparisons with post-hoc correction of categorical variables.
+`tab1_categorical_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of categorical variables.
 
 **Final project results should be saved in the `/project_tables/` directory.**
 
@@ -67,4 +67,4 @@ Detailed instructions on the code workflow are provided in the [code directory](
 
 ## 2. Deposit results
 
-Please deposit your results (all files within the `/project_tables/` directory) in a folder called `result_[SITE_NAME]` at [TODO--will add link later]
+Please deposit your results (all files within the `/project_tables/` directory) in a folder called `result_[SITE_NAME]` in the following folder: [`output/`](output/)
