@@ -15,20 +15,22 @@ Nevertheless, contemporary outcomes of moderately severe ARF patients admitted t
 Please refer to the online [CLIF data dictionary](https://clif-consortium.github.io/website/data-dictionary.html), [ETL tools](https://github.com/clif-consortium/CLIF/tree/main/etl-to-clif-resources), and [specific table contacts](https://github.com/clif-consortium/CLIF?tab=readme-ov-file#relational-clif) for more information on constructing the required tables and fields. 
 
 The following tables are required:
-1. **hospitalization**: `patient_id`, `hospitalization_id`, `admission_dttm`, `discharge_dttm`, `age_at_admission`, `discharge_category`
-2. **adt**: `hospitalization_id`, `hospital_id`, `hospital_type`, `in_dttm`. `out_dttm` `location_category`, `location_type`
-3. **respiratory_support**: `hospitalization_id`, `recorded_dttm`, `device_category`, `tracheostomy`, `fio2_set`
-4. **patient**: `patient_id`, `race_category`, `ethnicity_category`, `sex_category`
-5. **vitals**: `hospitalization_id`, `recorded_dttm`, `vital_category`, `vital_value`
-   - `vital_category` = 'map', 'spo2', 'weight_kg'
-6. **labs**: `hospitalization_id`, `lab_collect_dttm`, `lab_category`, `lab_value`
-   - `lab_category` = 'so2_arterial', 'so2_mixed_venous', 'so2_central_venous', 'ph_arterial', 'ph_venous', 'pco2_arterial', 'pco2_venous', 'po2_arterial', 'platelet_count', 'bilirubin_total', 'creatinine'
-7. **medication_admin_continuous**: `hospitalization_id`, `admin_dttm`, `med_name`, `med_category`, `med_group`, `med_dose`, `med_dose_unit`, `mar_action_name`
+1. **`hospitalization`**: `patient_id`, `hospitalization_id`, `admission_dttm`, `discharge_dttm`, `age_at_admission`, `discharge_category`
+2. **`adt`**: `hospitalization_id`, `hospital_id`, `hospital_type`, `in_dttm`. `out_dttm` `location_category`, `location_type`
+3. **`respiratory_support`**: `hospitalization_id`, `recorded_dttm`, `device_category`, `tracheostomy`, `fio2_set`
+4. **`medication_admin_continuous`**: `hospitalization_id`, `admin_dttm`, `med_name`, `med_category`, `med_group`, `med_dose`, `med_dose_unit`, `mar_action_name`
    - `med_category` = 'norepinephrine', 'epinephrine', 'phenylephrine', 'angiotensin', 'vasopressin', 'dopamine', 'dobutamine'
+5. **`code_status`**: `patient_id`, `start_dttm`, `code_status_category`
+6. **`patient`**: `patient_id`, `race_category`, `ethnicity_category`, `sex_category`
+7. **`vitals`**: `hospitalization_id`, `recorded_dttm`, `vital_category`, `vital_value`
+   - `vital_category` = 'map', 'spo2', 'weight_kg'
+8. **labs**: `hospitalization_id`, `lab_collect_dttm`, `lab_category`, `lab_value`
+   - `lab_category` = 'so2_arterial', 'so2_mixed_venous', 'so2_central_venous', 'ph_arterial', 'ph_venous', 'pco2_arterial', 'pco2_venous', 'po2_arterial', 'platelet_count', 'bilirubin_total', 'creatinine'
    - `med_group` = 'vasoactives'
-8. **patient_assessments**: `hospitalization_id`, `recorded_dttm`, `numerical_value`, `assessment_category` = 'gcs_total'
-9. **code_status**: `patient_id`, `start_dttm`, `code_status_category`
-10. We would like to include **patient_diagnosis**: `patient_id`, `hospitalization_id`, `diagnosis_code`, `diagnosis_code_format`, `start_dttm`, `end_dttm`, although we do not use it in our code as of now
+9. **`patient_assessments`**: `hospitalization_id`, `recorded_dttm`, `numerical_value`, `assessment_category` = 'gcs_total'
+10. We would like to include **`patient_diagnosis`**: `patient_id`, `hospitalization_id`, `diagnosis_code`, `diagnosis_code_format`, `start_dttm`, `end_dttm`, although we do not use it in our code as of now
+
+**`hospitalization`**, **`adt`**, **`respiratory_support`**, **`medication_admin_continuous`**, and **`code_status`** are used to identify hospitalizations and apply inclusion/exclusion criteria. Along with **`patient`**, these tables are also used to describe demographic features of the cohort. Additionally, **`vitals`**, **labs**, and **`patient_assessments`** are used alongside the aforementioned tables to characterize patient illness severity (e.g., non-respiratory SOFA score) and determine outcomes.
 
 ## Cohort identification
 **Inclusion Criteria:**
@@ -45,39 +47,24 @@ The following tables are required:
 
 ## Expected Results
 
-`.txt`: A text tile that reports the log of cohort size (will be used for CONSORT flow diagram). 
+`cohort_size.txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
 
-`tab1_continuous`: TODO
+`tab1_continuous`: Summary characteristics of included cohort, continuous variables only.
 
-`tab1_categorical`: TODO
+`tab1_categorical`: Summary characteristics of included cohort, categorical variables only.
 
-`tab1_continuous_comparisons`: TODO
+`tab1_continuous_comparisons`: Pairwise comparisons with post-hoc correction of continuous variables.
 
-`tab1_categorical_comparisons`: TODO
+`tab1_categorical_comparisons`: Pairwise comparisons with post-hoc correction of categorical variables.
 
-**Final project results should be saved in the [`/project_tables/`] directory.**
+**Final project results should be saved in the `/project_tables/` directory.**
 
 ## Detailed Instructions for running the project
 
-## 1. Update `config/config.json`
-Follow instructions in the [config/README.md](config/README.md) file for detailed configuration steps.
-
-**Note: if using the `01_run_cohort_id_app.R` file, this step is not necessary as the app will create the config file for the user**
-
-## 2. Set up the project environment
-
-*Describe the steps to setup the project environment.*
-
-Example for R:
-Run `00_renv_restore.R` in the [code](code/templates/R) to set up the project environment
-
-```
-
-## 3. Run code
+## 1. Run code
 
 Detailed instructions on the code workflow are provided in the [code directory](code/README.md)
 
-Please deposit your entire result_[SITE_NAME] at ____TODO____
----
+## 2. Deposit results
 
-
+Please deposit your results (all files within the `/project_tables/` directory) in a folder called `result_[SITE_NAME]` at [TODO--will add link later]

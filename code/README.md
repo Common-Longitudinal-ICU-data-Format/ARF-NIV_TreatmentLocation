@@ -1,46 +1,70 @@
  ## Code directory
 
-Update this README with the specific project workflow instructions.
-This directory contains scripts for the project workflow. The general workflow consists of three main steps: cohort identification, quality control, and analysis. Scripts can be implemented in R or Python, depending on project requirements. Please note that this workflow is just a suggestion, and you may change the structure to suit your project needs.
-
 ### General Workflow
 
-1. Run the cohort_identification script
+1. Run the `00_local_CLIF_ARF_cohort_identification.R` script
    This script should:
-   - Apply inclusion and exclusion criteria
-   - Select required fields from each table
-   - Filter tables to include only required observations
-
-   Expected outputs:
-   - cohort_ids: a list of unique identifiers for the study cohort
-   - cohort_data: the filtered study cohort data
-   - cohort_summary: a summary table describing the study cohort
-
-   Examples of cohort identification scripts:
-   - [`code/templates/Python/01_cohort_identification_template.py`](templates/Python/01_cohort_identification_template.py)
-   - [`code/templates/R/01_cohort_identification_template.R`](templates/R/01_cohort_identification_template.R)
-
-2. Run the quality_control script
-   This script should:
-   - Perform project-specific quality control checks on the filtered cohort data
-   - Handle outliers using predefined thresholds as given in `outlier-thresholds` directory. 
-   - Clean and preprocess the data for analysis
-
-   Script: [`code/templates/R/02_project_quality_checks_template.R`](templates/R/02_project_quality_checks_template.R) & [`code/templates/R/03_outlier_handling_template.R`](templates/R/03_outlier_handling_template.R) 
-
-   Input: cohort_data 
-
-   Output: cleaned_cohort_data 
-
-3. Run the analysis script(s)
-   This script (or set of scripts) should contain the main analysis code for the project.
-   It may be broken down into multiple scripts if necessary.
+   - Define study parameters and inclusion/exclusion criteria
+   - Create hospital blocks
+   - Identify valid ED encounters to include
    
-   Script: [`code/templates/R/04_project_analysis_template.R`](templates/R/04_project_analysis_template.R) 
+   Before running, users at each location must:
+   - Update `tables_location` as the path to their local CLIF tables
+   - Update `project_location` as the path to where these R files reside
+   - Update `site_time_zone` to the appropriate time zone
+   - Update `site` to the appropriate site name
 
-   Input: cleaned_cohort_data 
+   Script: [`code/00_local_CLIF_ARF_cohort_identification.R`](00_local_CLIF_ARF_cohort_identification.R)
+   
+   Input: 
+   - CLIF tables `hospitalization`, `adt`, `respiratory_support`, `code_status`, `medication_admin_continuous`
+   
+   Expected outputs:
+   - `cohort_size.txt`: Log of the cohort size as inclusion/exclusion criteria are applied
+   - `final_cohort.csv`: Basic table of included patients
+   - `hospital_block_key.csv`: Mapping table that links individual hospitalizations to grouped hospital episodes
 
-   Output: [List of expected result files, e.g., statistical_results, figures, tables saved in the [`output/final`](../output/README.md) directory] 
+2. Run the `01_local_CLIF_ARF_treatment_location_stratification.R` script
+   This script should:
+   - Classify physiologic phenotypes of ARF
+   - Calculate non-respiratory SOFA scores
+   - Track patient outcomes
+   - Apply outcome penalization for analysis
+   
+   Before running, users at each location must:
+   - Update `site_time_zone` to the appropriate time zone
+   - Update `tables_location` as the path to their local CLIF tables
+   - Update `project_location` as the path to where these R files reside
+   - Update `site` to the appropriate site name
+   
+   Script: [`code/01_local_CLIF_ARF_treatment_location_stratification.R`](01_local_CLIF_ARF_treatment_location_stratification.R)
+   
+   Input: 
+   - CLIF tables `patient`, `hospitalization`, `respiratory_support`, `vitals`, `labs`, `medication_admin_continuous`, `patient_assessments`, `adt`
+   - `final_cohort.csv`
+   - `hospital_block_key.csv`
+
+   Expected Output: 
+   - `final_cohort_with_stratification.csv`: Table of included patients with greater detail (e.g., patient demographics, SOFA, respiratory phenotype)
+
+3. Run the `02_local_CLIF_ARF_treatment_location_analysis.R` script
+   This script should:
+   - Summarize demographic characteristics between groups
+   - Describe and compare unadjusted outcomes data between groups
+   
+   Before running, users at each location must:
+   - Update `project_location` as the path to where these R files reside
+   
+   Script: [`code/02_local_CLIF_ARF_treatment_location_analysis.R`](02_local_CLIF_ARF_treatment_location_analysis.R)
+   
+   Input: 
+   - `final_cohort_with_stratification.csv`: 
+   
+   Output:
+   - `tab1_continuous`: Summary characteristics of included cohort, continuous variables only.
+   - `tab1_categorical`: Summary characteristics of included cohort, categorical variables only.
+   - `tab1_continuous_comparisons`: Pairwise comparisons with post-hoc correction of continuous variables.
+   - `tab1_categorical_comparisons`: Pairwise comparisons with post-hoc correction of categorical variables.
 
 
-
+**Note that all summarized output that must be shared will be in the `[PROJECT_LOCATION]/project_tables/` directory**
