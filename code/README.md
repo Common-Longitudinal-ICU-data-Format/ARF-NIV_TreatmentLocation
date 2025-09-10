@@ -3,7 +3,7 @@
 ### General Workflow
 
 0. Upload outlier cutoffs
-   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](outlier-thresholds/project_outlier_thresholds.csv) into your project directory.
+   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your project directory.
 
 1. Run the `00_local_CLIF_ARF_cohort_identification.R` script
 
