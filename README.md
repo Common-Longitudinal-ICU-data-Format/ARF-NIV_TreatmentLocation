@@ -1,4 +1,4 @@
-# Emergency Department Triage Pathways in Acute Respiratory Failure: A comprehensive analysis of utilization and outcomes.
+# The Role of Treatment Setting in Acute Respiratory Failure: A comprehensive analysis of utilization and outcomes.
 
 ## CLIF 2.1
 
