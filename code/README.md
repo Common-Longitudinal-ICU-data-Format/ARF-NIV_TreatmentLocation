@@ -71,4 +71,4 @@
    - `tab1_categorical_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of categorical variables.
 
 
-**Note that all summarized output that must be shared will be in the `[PROJECT_LOCATION]/project_tables/` directory**
+**Note that all summarized output that must be shared will be in the `[SITE_NAME_project_output]` directory; private, patient-level data will stay in the private_tables folder and should not be shared**

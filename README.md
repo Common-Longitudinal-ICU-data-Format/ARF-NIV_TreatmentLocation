@@ -67,4 +67,4 @@ Detailed instructions on the code workflow are provided in the [code directory](
 
 ## 2. Deposit results
 
-Please deposit your results (all files within the `/project_tables/` directory) in a folder called `result_[SITE_NAME]` in the following folder: [`output/`](output/)
+Please share your results by copy/pasting the entire `[SITE_NAME_project_output]` folder that you generated into the folder: [`output/`](output/)

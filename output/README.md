@@ -1,3 +1,3 @@
 ## Output directory
 
-Please upload your results (all files within the `/project_tables/` directory) in a folder called `result_[SITE_NAME]` within this folder.
+Please upload your results (the entire `[SITE_NAME_project_output]` folder) by copy/pasting that generated folder into this directory.
