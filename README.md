@@ -61,6 +61,10 @@ The following tables are required:
 
 ## Detailed Instructions for running the project
 
+## 0. Upload outlier cutoffs
+
+Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](outlier-thresholds/project_outlier_thresholds.csv) into your project directory
+
 ## 1. Run code
 
 Detailed instructions on the code workflow are provided in the [code directory](code/README.md)
