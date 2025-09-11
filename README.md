@@ -63,7 +63,7 @@ The following tables are required:
 
 ## 0. Upload outlier cutoffs
 
-Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](outlier-thresholds/project_outlier_thresholds.csv) into your `project_location` directory
+Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](outlier-thresholds/project_outlier_thresholds.csv) into your `project_location` directory. As well, please edit and upload the configuration file [`config.yaml`](config/config.yaml) inside a "config" folder in your local project directory folder.
 
 ## 1. Run code
 

@@ -3,12 +3,12 @@
 ### General Workflow
 
 0. Upload outlier cutoffs & edit/upload the config file
-   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your local working directory folder
-   - As well, please edit and upload the configuration file [`config.yaml`](../config/config.yaml) inside a "config" folder in your local working directory folder
-   - Your working directory should appear as follows:
+   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your local project directory folder
+   - As well, please edit and upload the configuration file [`config.yaml`](../config/config.yaml) inside a "config" folder in your local project directory folder
+   - Your project directory should appear as follows:
    
       <pre>
-      [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
+      [NAME OF YOUR LOCAL PROJECT DIRECTORY FOLDER]/
       ├── config/
       │   └── config.yaml
       ├── 00_local_CLIF_ARF_cohort_identification.Rmd
