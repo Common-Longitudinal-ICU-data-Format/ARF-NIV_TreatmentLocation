@@ -2,8 +2,16 @@
 
 ### General Workflow
 
-0. Upload outlier cutoffs
-   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your `project_location` directory.
+0. Upload outlier cutoffs & edit/upload the config file
+   - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your local working directory folder
+   - As well, please edit and upload the configuration file [`config.yaml`](../config/config.yaml) inside a "config" folder in your local working directory folder
+   - Your working directory should appear as follows:
+   [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
+   ├── config/
+   │   └── clif_config.yaml
+   ├── [ALL OF THE SCRIPTS FOR THIS PROJECT].Rmd
+   ├── project_outlier_thresholds.csv
+   └── ...
 
 1. Run the `00_local_CLIF_ARF_cohort_identification.R` script
 
@@ -52,7 +60,7 @@
    **Expected Output:**
    - `final_cohort_with_stratification.csv`: Table of included patients with greater detail (e.g., patient demographics, SOFA, respiratory phenotype)
 
-3. Run the `02_local_CLIF_ARF_treatment_location_analysis.R` script
+3. Run the `02_local_CLIF_ARF_treatment_location_descriptive.R` script
 
    **This script should:**
    - Summarize demographic characteristics between groups
@@ -62,7 +70,7 @@
    - Update `project_location` as the path to where these R files reside
    - Update `site` to the appropriate site name
    
-   **Script:** [`code/02_local_CLIF_ARF_treatment_location_analysis.R`](02_local_CLIF_ARF_treatment_location_analysis.R)
+   **Script:** [`code/02_local_CLIF_ARF_treatment_location_descriptives.R`](02_local_CLIF_ARF_treatment_location_descriptive.R)
    
    **Input:**
    - `final_cohort_with_stratification.csv`: 
@@ -72,6 +80,7 @@
    - `tab1_categorical_[SITENAME].csv`: Summary characteristics of included cohort, categorical variables only.
    - `tab1_continuous_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of continuous variables.
    - `tab1_categorical_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of categorical variables.
-
+   
+4. TODO
 
 **Note that all summarized output that must be shared will be in the `[SITE_NAME_project_output]` directory; private, patient-level data will stay in the `private_tables` folder and should not be shared**
