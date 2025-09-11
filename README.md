@@ -28,9 +28,9 @@ The following tables are required:
    - `lab_category` = 'so2_arterial', 'so2_mixed_venous', 'so2_central_venous', 'ph_arterial', 'ph_venous', 'pco2_arterial', 'pco2_venous', 'po2_arterial', 'platelet_count', 'bilirubin_total', 'creatinine'
    - `med_group` = 'vasoactives'
 9. **`patient_assessments`**: `hospitalization_id`, `recorded_dttm`, `numerical_value`, `assessment_category` = 'gcs_total'
-10. We would like to include **`patient_diagnosis`**: `patient_id`, `hospitalization_id`, `diagnosis_code`, `diagnosis_code_format`, `start_dttm`, `end_dttm`, although we do not use it in our code as of now
+10. **`hospital_diagnosis`**: `hospitalization_id`, `diagnosis_code`, `diagnosis_code_format`, `diagnosis_primary`, `poa_present`
 
-**`hospitalization`**, **`adt`**, **`respiratory_support`**, **`medication_admin_continuous`**, and **`code_status`** are used to identify hospitalizations and apply inclusion/exclusion criteria. Along with **`patient`**, these tables are also used to describe demographic features of the cohort. Additionally, **`vitals`**, **labs**, and **`patient_assessments`** are used alongside the aforementioned tables to characterize patient illness severity (e.g., non-respiratory SOFA score) and determine outcomes.
+**`hospitalization`**, **`adt`**, **`respiratory_support`**, **`medication_admin_continuous`**, and **`code_status`** are used to identify hospitalizations and apply inclusion/exclusion criteria. Along with **`patient`**, these tables are also used to describe demographic features of the cohort. Additionally, **`vitals`**, **labs**, **`patient_assessments`**, and **`hospital_diagnosis`** are used alongside the aforementioned tables to characterize patient illness severity (e.g., non-respiratory SOFA score) and determine outcomes.
 
 ## Cohort identification
 **Inclusion Criteria:**
