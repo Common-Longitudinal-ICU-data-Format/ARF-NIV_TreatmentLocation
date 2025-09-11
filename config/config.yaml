@@ -1,0 +1,13 @@
+# Add local paath to CLIF tables
+tables_location: "/share/projects/data/circe/v20250630/clif/"
+
+# Add local path to project output location
+project_location: "/share/projects/data/circe/clif_ats_2024/language_manuscript_new/"
+
+# Add your institution name
+institution: "Hopkins"
+# Add your local time zone
+# Options are: EST = 'America/New_York', CST = 'America/Chicago', PST = 'America/Los_Angeles'
+time_zone: "America/New_York"
+
+file_type: "parquet"
