@@ -7,21 +7,18 @@
    - As well, please edit and upload the configuration file [`config.yaml`](../config/config.yaml) inside a "config" folder in your local working directory folder
    - Your working directory should appear as follows:
    
-    [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
-    
-    ├── config/
-    
-    │   └── config.yaml
-    
-    ├── 00_local_CLIF_ARF_cohort_identification.Rmd
-    
-    ├── 01_local_CLIF_ARF_treatment_location_stratification.Rmd
-    
-    ├── ... [all other Rmd files listed here]
-    
-    ├── project_outlier_thresholds.csv
-    
-    └── ...
+      <pre>
+      ```bash
+      [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
+      ├── config/
+      │   └── config.yaml
+      ├── 00_local_CLIF_ARF_cohort_identification.Rmd
+      ├── 01_local_CLIF_ARF_treatment_location_stratification.Rmd
+      ├── ... [all other Rmd files listed here]
+      ├── project_outlier_thresholds.csv
+      └── ...
+      ```
+      </pre>
 
 1. Run the `00_local_CLIF_ARF_cohort_identification.Rmd` script
 

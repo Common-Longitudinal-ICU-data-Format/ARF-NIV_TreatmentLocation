@@ -5,7 +5,7 @@ In this directory, we define outlier thresholds for variables specific to the pr
 Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](project_outlier_thresholds.csv) within this directory into your local working directory folder alongside the R scripts such that it appears like this:
 
 <pre>
-```tree
+```bash
 [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
 ├── config/
 │   └── config.yaml

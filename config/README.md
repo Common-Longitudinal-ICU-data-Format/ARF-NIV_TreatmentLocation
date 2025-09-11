@@ -3,7 +3,7 @@
 Please edit the fields in the YAML file within this directory and uplaod it in a folder called `config` in your project directory such that it appears like this in your folder:
 
 <pre>
-```tree
+```bash
 [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
 ├── config/
 │   └── config.yaml
