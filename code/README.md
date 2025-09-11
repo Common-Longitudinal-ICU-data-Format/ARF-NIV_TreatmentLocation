@@ -6,11 +6,17 @@
    - Before running the code for this project, please upload the file [`project_outlier_thresholds.csv`](../outlier-thresholds/project_outlier_thresholds.csv) into your local working directory folder
    - As well, please edit and upload the configuration file [`config.yaml`](../config/config.yaml) inside a "config" folder in your local working directory folder
    - Your working directory should appear as follows:
+   
    [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
+   
    ├── config/
+   
    │   └── clif_config.yaml
+   
    ├── [ALL OF THE SCRIPTS FOR THIS PROJECT].Rmd
+   
    ├── project_outlier_thresholds.csv
+   
    └── ...
 
 1. Run the `00_local_CLIF_ARF_cohort_identification.R` script
