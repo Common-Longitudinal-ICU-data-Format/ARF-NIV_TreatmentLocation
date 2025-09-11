@@ -3,7 +3,6 @@
 Please edit the fields in the YAML file within this directory and uplaod it in a folder called `config` in your project directory such that it appears like this in your folder:
 
 <pre>
-```bash
 [NAME OF YOUR LOCAL WORKING DIRECTORY FOLDER]/
 ├── config/
 │   └── config.yaml
@@ -12,5 +11,4 @@ Please edit the fields in the YAML file within this directory and uplaod it in a
 ├── ... [all other Rmd files listed here]
 ├── project_outlier_thresholds.csv
 └── ...
-```
 </pre>
