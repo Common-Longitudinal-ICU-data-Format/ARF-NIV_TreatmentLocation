@@ -12,7 +12,8 @@ so2_arterial,0,100
 so2_mixed_venous,0,100
 so2_central_venous,0,100
 weight_kg,30,1100
-map,0,250
+height_cm,100,250
+map,30,250
 spo2,50,100
 gcs_total,0,15
 age_at_admission,18,120
