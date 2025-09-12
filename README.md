@@ -23,7 +23,7 @@ The following tables are required:
 5. **`code_status`**: `patient_id`, `start_dttm`, `code_status_category`
 6. **`patient`**: `patient_id`, `race_category`, `ethnicity_category`, `sex_category`
 7. **`vitals`**: `hospitalization_id`, `recorded_dttm`, `vital_category`, `vital_value`
-   - `vital_category` = 'map', 'spo2', 'weight_kg'
+   - `vital_category` = 'map', 'spo2', 'weight_kg', 'height_cm'
 8. **labs**: `hospitalization_id`, `lab_collect_dttm`, `lab_category`, `lab_value`
    - `lab_category` = 'so2_arterial', 'so2_mixed_venous', 'so2_central_venous', 'ph_arterial', 'ph_venous', 'pco2_arterial', 'pco2_venous', 'po2_arterial', 'platelet_count', 'bilirubin_total', 'creatinine'
    - `med_group` = 'vasoactives'
