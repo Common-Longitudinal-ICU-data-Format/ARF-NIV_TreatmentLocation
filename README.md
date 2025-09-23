@@ -41,21 +41,24 @@ The following tables are required:
 
 **Exclusion Criteria:**
 - Intubation or tracheostomy while in the ED
-- Continuous vasopressors received while in the ED
 - Code status of "allow natural death" at time of leaving the ED (e.g., admission)
 - Patient still admitted by end-point of study
 
+**Further Cohort Selection Criteria (to be used for outcome analyses):**
+- Continuous vasopressors received while in the ED
+- Worst SF ratio in the ED < 150
+- Worst PF ratio in the ED < 250
+- Worst PaCO2 > 60 and worst pH < 7.25 in the ED
+- Last GCS in the ED < 9
+- Patient discharged from the ED without admission
+
 ## Expected Results
 
-`cohort_size_[SITENAME].txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
+`broad_cohort_size_[SITENAME].txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
 
-`tab1_continuous_[SITENAME].csv`: Summary characteristics of included cohort, continuous variables only.
+`analytic_cohort_size_[SITENAME].txt`: A text file that reports the log of cohort size (will be used for CONSORT flow diagram). 
 
-`tab1_categorical_[SITENAME].csv`: Summary characteristics of included cohort, categorical variables only.
-
-`tab1_continuous_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of continuous variables.
-
-`tab1_categorical_comparisons_[SITENAME].csv`: Pairwise comparisons with post-hoc correction of categorical variables.
+Additionally, many csv and html files will output to the `[SITENAME]_project_output` folder, which will be named according to table number, which cohort was being used, and the site name.
 
 **Final project results should be saved in the `/project_tables/` directory.**
 
