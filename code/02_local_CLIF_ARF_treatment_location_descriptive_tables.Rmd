@@ -1,0 +1,268 @@
+---
+title: "02_local_CLIF_ARF_treatment_location_descriptive_tables"
+author: "Sarah Goldfarb"
+date: "2025-09-23"
+output: html_document
+---
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+packages <- c("duckdb", 
+              "lubridate", 
+              "tidyverse", 
+              "dplyr",
+              "table1", 
+              "broom", 
+              "arrow", 
+              "rvest", 
+              "readr", 
+              "fst", 
+              "data.table", 
+              "collapse", 
+              "tictoc",
+              "gtsummary",
+              "zoo",
+              "yaml",
+              "rprojroot",
+              "comorbidity")
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+```
+
+# Create folders if needed
+```{r Create folders if needed, include=FALSE}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+```
+
+# Reading in data
+```{r Read in cohort and hospital block information}
+broad_cohort <- read_csv(paste0(project_location, "/private_tables/broad_cohort_with_stratification.csv"), show_col_types=FALSE)
+analytic_cohort <- read_csv(paste0(project_location, "/private_tables/analytic_cohort_with_stratification.csv"), show_col_types=FALSE)
+```
+
+# Reformat variables for table display
+```{r Reformat and reorder variables for table display}
+
+
+reformat_cohort_cols <- function(df, traige_location_factors=c("ICU", "IMC", "Ward")) {
+  return(df |>
+  mutate(
+    # Format triage location
+    triage_location_formatted = case_when(
+      triage_location == "icu" ~ "ICU",
+      triage_location == "stepdown" ~ "IMC",
+      triage_location == "ward" ~ "Ward",
+      triage_location == "discharge" ~ "Discharged",
+      TRUE ~ triage_location),
+    # Set triage location as factor
+    triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+    # Factor race
+    race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
+    # Factor last NIV device
+    last_niv_device = factor(last_niv_device, levels=c("CPAP", "NIPPV", "High Flow NC")),
+    # Factor type of ARF
+    physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+    # Create binary variable if patient is female
+    is_female = ifelse(tolower(sex_category) == "female", 1, 0)
+  ))
+}
+
+broad_cohort <- reformat_cohort_cols(broad_cohort, traige_location_factors=c("ICU", "IMC", "Ward", "Discharged"))
+
+analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+```
+
+# Create table 1 for both the broad cohort and the analytic cohort
+```{r Create table 1 for both the broad cohort and the analytic cohort}
+
+create_tab1 <- function(df, cohort_prefix){
+  
+  ### Create HTML table to view ###
+  
+  triage_n <- as.numeric(table(df$triage_location_formatted))
+
+  tab1 <- df |>
+    select(
+      triage_location_formatted,
+      age_at_admission,
+      is_female,
+      first_bmi,
+      race_summary,
+      elixhauser_total,
+      ed_hours,
+      last_niv_device,
+      physiologic_type,
+      sf_value,
+      pf_value,
+      last_fio2,
+      worst_non_resp_sofa
+    ) |>
+    tbl_summary(
+      by = triage_location_formatted,
+      statistic = list(
+        all_continuous() ~ "{mean} ({sd})",
+        all_categorical() ~ "{n} ({p}%)"
+      ),
+      label = list(
+        age_at_admission ~ "Age, years, mean (SD)",
+        is_female ~ "Female, n (%)",
+        first_bmi ~ "BMI, mg/kg2, mean (SD)",
+        race_summary ~ "Race, n (%)",
+        elixhauser_total ~ "Elixhauser comorbidities, mean (SD)",
+        ed_hours ~ "Time in ED, hours, mean (SD)",
+        last_niv_device ~ "Type of NIV, n (%)",
+        physiologic_type ~ "Physiologic type of ARF, n (%)",
+        sf_value ~ "SF Ratio, mean (SD)",
+        pf_value ~ "PF Ratio, mean (SD)",
+        last_fio2 ~ "FiO2, mean (SD)",
+        worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD)"
+      ),
+      missing="ifany"
+    ) |>
+    modify_footnote(everything() ~ NA)|>
+    modify_table_body(
+      ~ .x |>
+        mutate(
+          across(starts_with("stat_"), 
+                 ~ ifelse(label == "Unknown", 
+                          paste0(.x, " (", 
+                                 round(100*
+                                         suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x)))
+                                       /triage_n[as.integer(sub("stat_", "", cur_column()))]),
+                                 "%)"),
+                          .x))
+        ) |>
+        mutate(label = ifelse(label == "Unknown", "Missing data, n (%)", label))
+    )|>
+    bold_labels() |>
+    modify_table_styling(
+      columns = everything(),
+      rows = label == "Missing data, n (%)",
+      text_format = "italic")
+  
+  # Save as a viewable HTML
+  tab1 |>
+    as_gt() |>
+    gtsave(paste0(project_location,"/", site, "_project_output/tab1_", cohort_prefix, "_cohort_", site, ".html"))
+  
+  
+  ### Save as CSVs ###
+  
+  # Create single table for all variables
+  tab1_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T),
+                           summarize_continuous(df, "first_bmi", "bmi"),
+                           summarize_continuous(df, "elixhauser_total", "elix"),
+                           summarize_continuous(df, "ed_hours"),
+                           summarize_continuous(df, "sf_value", "sf_value"),
+                           summarize_continuous(df, "pf_value", "pf_value"),
+                           summarize_continuous(df, "last_fio2", "fio2"),
+                           summarize_continuous(df, "worst_non_resp_sofa", "sofa"))
+  
+  # Output continuous to csv
+  write.csv(tab1_continuous,
+            paste0(
+              project_location,"/", site, "_project_output/tab1_continuous_", cohort_prefix, "_cohort_", site, ".csv"), 
+            row.names = FALSE)
+  
+  # Create single table for all variables
+  tab1_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE),
+                            summarize_categorical(df, "sex_category", nickname = "sex"),
+                            summarize_categorical(df, "last_niv_device", nickname = "niv"),
+                            summarize_categorical(df, "physiologic_type", nickname = "physiologic_type"))
+  
+  
+  # Output to csv
+  write.csv(tab1_catagorical,
+            paste0(
+              project_location,"/", site, "_project_output/tab1_catagorical_", cohort_prefix, "_cohort_", site, ".csv"), 
+            row.names = FALSE)
+  
+  
+  ### View Results ###
+  return(tab1)
+}
+
+summarize_continuous <- function(data, column_name, nickname = NA, include_titles = F, by_column = "triage_location") {
+  
+  # Convert column names to symbols
+  col_symbol <- sym(column_name)
+  by_symbol <- sym(by_column)
+  
+  # Set the nickname to the column name if not specified
+  nickname <- coalesce(nickname, column_name)
+  
+  summary <- data |>
+    summarise(
+      !!paste0("n_", nickname)  := sum(!is.na(!!col_symbol)),
+      !!paste0("mean_", nickname) := mean(!!col_symbol, na.rm = TRUE),
+      !!paste0("sd_", nickname) := sd(!!col_symbol, na.rm = TRUE),
+      .by = !!by_symbol
+    )
+  
+  if(include_titles)
+    return(summary |> mutate(site = site) |> relocate(site, .before = 1))
+  return(summary |> select(-by_column))
+}
+
+summarize_categorical <- function(data, column_name, nickname = NA, include_titles = FALSE, by_column = "triage_location") {
+  
+  col_sym <- sym(column_name)
+  by_sym  <- sym(by_column)
+  
+  nickname <- coalesce(nickname, column_name)
+  
+  summary <- data %>%
+    group_by(!!by_sym, !!col_sym) %>%
+    summarise(
+      !!paste0("n_", nickname)   := n(),
+      .groups = "drop"
+    ) |>
+    pivot_wider(
+      names_from  = !!col_sym,
+      values_from = c(!!sym(paste0("n_", nickname))) ,
+      names_glue = paste0(nickname, "_{.name}") 
+      )
+  
+  if(include_titles) 
+    return(summary |> mutate(site=site) |> relocate(site, .before = 1))
+  return(summary |> select(-by_column))
+}
+
+```
+
+```{r}
+create_tab1(broad_cohort, "broad")
+create_tab1(analytic_cohort, "analytic")
+```
+

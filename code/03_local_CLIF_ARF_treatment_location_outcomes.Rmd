@@ -1,0 +1,556 @@
+---
+title: "03_local_CLIF_ARF_treatment_location_outcomes"
+author: "Sarah Goldfarb"
+date: "2025-09-23"
+output: html_document
+---
+
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+
+packages <- c("duckdb", 
+              "lubridate", 
+              "tidyverse", 
+              "dplyr",
+              "table1", 
+              "broom", 
+              "arrow", 
+              "rvest", 
+              "readr", 
+              "fst", 
+              "data.table", 
+              "collapse", 
+              "tictoc",
+              "gtsummary",
+              "gt",
+              "zoo",
+              "yaml",
+              "rprojroot",
+              "comorbidity",
+              "icd.data")
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+```
+
+# Set global variables
+```{r Set global variables}
+TRIAGE_COLORS <- c(
+    "ICU" = "red",
+    "IMC" = "purple",
+    "Ward" = "blue"
+  )
+
+# Start time
+STUDY_START <- as.POSIXct("2018-01-01", tz=site_time_zone)
+# End time
+STUDY_END <- as.POSIXct("2024-12-31", tz=site_time_zone)
+```
+
+# Create folders if needed
+```{r Create folders if needed, include=FALSE}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+```
+
+# Reading in data
+```{r Read in cohort and hospital block information}
+analytic_cohort <- read_csv(paste0(project_location, "/private_tables/analytic_cohort_with_stratification.csv"), show_col_types=FALSE)
+```
+
+# Reformat variables for table display
+```{r Reformat and reorder variables for table display}
+reformat_cohort_cols <- function(df, traige_location_factors=c("ICU", "IMC", "Ward")) {
+  return(df |>
+  mutate(
+    # Format triage location
+    triage_location_formatted = case_when(
+      triage_location == "icu" ~ "ICU",
+      triage_location == "stepdown" ~ "IMC",
+      triage_location == "ward" ~ "Ward",
+      triage_location == "discharge" ~ "Discharged",
+      TRUE ~ triage_location),
+    # Set triage location as factor
+    triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+    # Factor race
+    race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
+    # Factor last NIV device
+    last_niv_device = factor(last_niv_device, levels=c("CPAP", "NIPPV", "High Flow NC")),
+    # Factor type of ARF
+    physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+    # Create binary variable if patient is female
+    is_female = ifelse(tolower(sex_category) == "female", 1, 0),
+    # Binary variable if patient died or discharged to hospice within 28 days
+    death_hospice_28 = ifelse(
+      (in_hosp_death == 1 | hospice == 1) &
+      as.numeric(difftime(block_end_discharge, niv_start, units = "days")) <= 28,
+      1, 0
+    ),
+    # Binary variable if patient died or discharged to hospice within 60 days
+    death_hospice_60 = ifelse(
+      (in_hosp_death == 1 | hospice == 1) &
+      as.numeric(difftime(block_end_discharge, niv_start, units = "days")) <= 60,
+      1, 0
+    ),
+    # Binary variable if patient had imv (set as NA if patient was DNI)
+    imv = ifelse(is_dni, NA, ifelse(was_trach == 1 | was_intubated == 1, 1, 0)),
+    # Binary variable if patient died or discharged to hospice at all
+    death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
+    
+    # Reformat ICD code 9 vs 10
+    diagnosis_code_format = case_when(
+      str_detect(diagnosis_code_format, regex(paste0("icd.*9.*"), ignore_case = TRUE)) ~ "icd9",
+      str_detect(diagnosis_code_format, regex(paste0("icd.*10.*"), ignore_case = TRUE)) ~ "icd10",
+      TRUE ~ NA_character_
+    ),
+    # Reformat ICD codes to remove any non alphanumeric
+    primary_diagnosis = gsub("[^A-Za-z0-9]", "", primary_diagnosis),
+    
+    # Create log10 scale for relevant variables
+    los_pen_logged = log10(los_penalized),
+    
+    # Create a time variable based on presentation date
+    time_x = as.Date(start_ed)
+    
+  ))
+}
+
+analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+```
+
+```{r set icd diagnosis}
+
+# Store list of all ICD codes using icd package
+icd_descriptions <- rbind(
+  icd10cm2016[,c("code", "short_desc", "major", "sub_chapter","chapter")] |>
+    mutate(diagnosis_code_format="icd10"),
+  icd9cm_hierarchy[,c("code", "short_desc", "major", "sub_chapter","chapter")]|>
+    mutate(diagnosis_code_format="icd9"))|>
+  # Rename column
+  rename(primary_diagnosis=code) |>
+  # Cast to string for comparison
+  mutate(primary_diagnosis = as.character(primary_diagnosis))
+
+# Join diagnosis information with final cohort
+analytic_cohort <- analytic_cohort |>
+  left_join(
+    icd_descriptions,
+    by=c("primary_diagnosis", "diagnosis_code_format")
+  )
+
+
+# Output the counts 
+write.csv(
+  # Send in count table for icd chapters
+  setNames(as.data.frame(table(analytic_cohort$chapter, analytic_cohort$triage_location)), c("icd_chapter", "triage_location", "count")) |> 
+    filter(count>0),
+  # Set file path
+  paste0(project_location,"/", site, "_project_output/icd_table_", site, ".csv"),
+  row.names = FALSE)
+
+```
+
+# Create functions for stacking summary data
+```{r}
+
+summarize_continuous <- function(data, column_name, nickname = NA, include_titles = F, by_column = "triage_location") {
+  
+  # Convert column names to symbols
+  col_symbol <- sym(column_name)
+  by_symbol <- sym(by_column)
+  
+  # Set the nickname to the column name if not specified
+  nickname <- coalesce(nickname, column_name)
+  
+  summary <- data |>
+    summarise(
+      !!paste0("n_", nickname)  := sum(!is.na(!!col_symbol)),
+      !!paste0("mean_", nickname) := mean(!!col_symbol, na.rm = TRUE),
+      !!paste0("sd_", nickname) := sd(!!col_symbol, na.rm = TRUE),
+      .by = !!by_symbol
+    )
+  
+  if(include_titles)
+    return(summary |> mutate(site = site) |> relocate(site, .before = 1))
+  return(summary |> select(-by_column))
+}
+
+summarize_categorical <- function(data, column_name, nickname = NA, include_titles = FALSE, by_column = "triage_location") {
+  
+  col_sym <- sym(column_name)
+  by_sym  <- sym(by_column)
+  
+  nickname <- coalesce(nickname, column_name)
+  
+  summary <- data %>%
+    group_by(!!by_sym, !!col_sym) %>%
+    summarise(
+      !!paste0("n_", nickname)   := n(),
+      .groups = "drop"
+    ) |>
+    pivot_wider(
+      names_from  = !!col_sym,
+      values_from = c(!!sym(paste0("n_", nickname))) ,
+      names_glue = paste0(nickname, "_{.name}") 
+      )
+  
+  if(include_titles) 
+    return(summary |> mutate(site=site) |> relocate(site, .before = 1))
+  return(summary |> select(-by_column))
+}
+```
+
+# Table 2
+```{r Table 2}
+triage_n <- as.numeric(table(analytic_cohort$triage_location_formatted))
+
+tab2 <- analytic_cohort |>
+  select(
+    death_hospice,
+    death_hospice_28,
+    death_hospice_60,
+    triage_location_formatted,
+    los_penalized,
+    days_off,
+    imv,
+    was_escalated
+    # May need to add stuff for diagnostic codes and discharge location
+  ) |>
+  tbl_summary(
+    by = triage_location_formatted,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    label = list(
+      death_hospice ~ "In-hospital death or discharge to hospice at any time, n (%)",
+      death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
+      death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
+      los_penalized ~ "Length of stay, days, mean (SD)",
+      days_off ~ "Time off invasive/high flow respiratory support within 28 days of starting NIV, days, mean (SD)",
+      imv ~ "Progression to invasive mechanical ventilation, n (%)",
+      was_escalated ~ "Transfer to a higher level of care, n (%)"
+      # Add stuff for diagnostic codes and discharge location
+    ),
+    missing="ifany"
+  ) |>
+  modify_footnote(everything() ~ NA)|>
+  modify_table_body(
+    ~ .x |>
+      mutate(
+        across(starts_with("stat_"), 
+               ~ ifelse(label == "Unknown", 
+                        paste0(.x, " (", 
+                               round(100*
+                                       suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x)))
+                                     /triage_n[as.integer(sub("stat_", "", cur_column()))]),
+                               "%)"),
+                        .x))
+      ) |>
+      mutate(label = ifelse(label == "Unknown", "Not included due to DNI status at time of admission, n (%)", label))
+  )|>
+  bold_labels() |>
+  modify_table_styling(
+    columns = everything(),
+    rows = label == "Missing data, n (%)",
+    text_format = "italic")
+
+# Save as a viewable HTML
+tab2 |>
+  as_gt() |>
+  gtsave(paste0(project_location,"/", site, "_project_output/tab2_", site, ".html"))
+
+# View here
+tab2
+
+
+### Save as CSVs ###
+
+# Create single table for all variables
+tab2_continuous <- cbind(summarize_continuous(analytic_cohort, "los_penalized", "los", T),
+                         summarize_continuous(analytic_cohort, "days_off", "days_off"))
+
+# Output continuous to csv
+write.csv(tab2_continuous,
+          paste0(
+            project_location,"/", site, "_project_output/tab2_continuous_", site, ".csv"), 
+          row.names = FALSE)
+
+# Create single table for all variables
+tab2_catagorical <- cbind(summarize_categorical(analytic_cohort, "death_hospice", nickname = "dh", include_titles = TRUE),
+                          summarize_categorical(analytic_cohort, "death_hospice_28", nickname = "dh_28"),
+                          summarize_categorical(analytic_cohort, "death_hospice_60", nickname = "dh_60"),
+                          summarize_categorical(analytic_cohort, "imv", nickname = "imv"),
+                          summarize_categorical(analytic_cohort, "was_escalated", nickname = "was_escalated"))
+
+
+# Output to csv
+write.csv(tab2_catagorical,
+          paste0(
+            project_location,"/", site, "_project_output/tab2_catagorical_", site, ".csv"), 
+          row.names = FALSE)
+```
+
+# Plot figure 2
+```{r Figure 2a}
+# Figure 2a
+fig2a <- ggplot(analytic_cohort, aes(x = los_pen_logged, fill = triage_location_formatted)) +
+  geom_histogram(binwidth = 0.2, position = "dodge", linewidth=0) +
+  labs(
+    x = "Length of Stay (days, log 10 scale)",
+    y = "Number of Hospitalizations",
+    fill = "Initial Admission Location"
+  ) +
+  theme_minimal() +
+  #scale_x_log10() +
+  scale_fill_manual(values = TRIAGE_COLORS) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  )
+
+# Save plot
+ggsave(paste0(project_location,"/", site, "_project_output/fig2a_", site, ".jpg"), plot=fig2a, width=6, height=5, dpi=300)
+
+# View here
+fig2a
+
+# Save plot data for combining with other sites
+fig2a_data <- ggplot_build(fig2a)$data[[1]]
+# Map numeric groups to factor levels
+fig2a_data$triage_location_formatted <- levels(analytic_cohort$triage_location_formatted)[fig2a_data$group]
+# Keep actual colors
+fig2a_data$fill_color <- fig2a_data$fill
+# Save as csv
+write.csv(fig2a_data,
+          paste0(
+            project_location,"/", site, "_project_output/fig2a_data_", site, ".csv"), 
+row.names = FALSE)
+```
+
+
+```{r Figure 2b}
+# Figure 2b
+fig2b <- ggplot(analytic_cohort, aes(x = days_off, fill = triage_location_formatted)) +
+  geom_histogram(binwidth = 3, position = "dodge", linewidth=0) +
+  labs(
+    x = "Number of Days off Invasive/High Flow Respiratory Support",
+    y = "Number of Hospitalizations",
+    fill = "Initial Admission Location"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = TRIAGE_COLORS) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  )
+
+# Save plot
+ggsave(paste0(project_location,"/", site, "_project_output/fig2b_", site, ".jpg"), plot=fig2b, width=6, height=5, dpi=300)
+
+# View here
+fig2b
+
+
+# Save plot data for combining with other sites
+fig2b_data <- ggplot_build(fig2b)$data[[1]]
+# Map numeric groups to factor levels
+fig2b_data$triage_location_formatted <- levels(analytic_cohort$triage_location_formatted)[fig2b_data$group]
+# Keep actual colors
+fig2b_data$fill_color <- fig2b_data$fill
+# Save as csv
+write.csv(fig2b_data,
+          paste0(
+            project_location,"/", site, "_project_output/fig2b_data_", site, ".csv"), 
+row.names = FALSE)
+```
+
+```{r Figure 2c}
+# Figure 2c
+
+# Narrowing cohort for this plot
+fig_2c_cohort <- analytic_cohort |>
+  # Excluding DNI patients
+  filter(!is_dni) |>
+  # Only including patients who got imv
+  filter(imv==1) |>
+  # Set days to trach and intubation as numeric 
+  mutate(days_to_trach = as.numeric(time_to_trach, units="days"),
+         days_to_intubation = as.numeric(time_to_intubation, units="days")) |>
+  mutate(days_to_imv = pmin(days_to_trach,days_to_intubation, na.rm=TRUE)) |>
+  select(hospital_block_id, triage_location_formatted, days_to_imv)
+
+# Set log10 days
+fig_2c_cohort <- fig_2c_cohort |>
+  mutate(los_days_to_imv = log10(days_to_imv))
+
+fig2c <- ggplot(fig_2c_cohort, aes(x = los_days_to_imv, fill = triage_location_formatted)) +
+  geom_histogram(binwidth = 0.3, position = "dodge", linewidth=0) +
+  labs(
+    x = "Number of Days to Invasive Ventilation (log 10 scale)",
+    y = "Number of Hospitalizations",
+    fill = "Initial Admission Location"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = TRIAGE_COLORS) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  )
+
+# Save plot
+ggsave(paste0(project_location,"/", site, "_project_output/fig2c_", site, ".jpg"), plot=fig2c, width=6, height=5, dpi=300)
+
+# View here
+fig2c
+
+
+# Save plot data for combining with other sites
+fig2c_data <- ggplot_build(fig2c)$data[[1]]
+# Map numeric groups to factor levels
+fig2c_data$triage_location_formatted <- levels(analytic_cohort$triage_location_formatted)[fig2c_data$group]
+# Keep actual colors
+fig2c_data$fill_color <- fig2c_data$fill
+# Save as csv
+write.csv(fig2c_data,
+          paste0(
+            project_location,"/", site, "_project_output/fig2c_data_", site, ".csv"), 
+row.names = FALSE)
+```
+
+
+# Figure E1
+```{r}
+plot_figE1_panels <- function(
+  data,
+  fill_column,
+  legend_title,
+  fill_values,
+  panel_num,
+  x_var = "time_x",
+  binwidth_days = 60,
+  x_start = STUDY_START,
+  x_end = STUDY_END,
+  x_breaks_months = 12,
+  plot_width = 8,
+  plot_height = 6,
+  dpi = 300,
+  save_path = NULL,
+  site_name = NULL,
+  file_prefix = "figE1"
+) {
+  
+  p <- ggplot(data, aes(x = !!sym(x_var), fill = !!sym(fill_column))) +
+    geom_histogram(binwidth = binwidth_days, position = "stack", linewidth = 0) +
+    labs(
+      x = "Date",
+      y = "Number of Hospital Blocks",
+      fill = legend_title
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    scale_fill_manual(values = fill_values) +
+    scale_x_date(
+      date_labels = "%-m/%Y",
+      breaks = seq(as.Date(x_start), as.Date(x_end), by = paste0(x_breaks_months, " months"))
+    )
+  
+  # Make sure the path and file name are sent in
+  if (!is.null(save_path) & !is.null(site_name)) {
+    # Save the image of the plot
+    ggsave(
+      filename = paste0(save_path, "/", site_name, "_project_output/", file_prefix, panel_num, "_", site_name, ".jpg"),
+      plot = p,
+      width = plot_width,
+      height = plot_height,
+      dpi = dpi
+    )
+    
+    # Save the data
+    figE1_data <- ggplot_build(p)$data[[1]]
+    # Map numeric groups to factor levels
+    figE1_data[[fill_column]] <- levels(data[[fill_column]])[figE1_data$group]
+    # Keep actual fill color
+    figE1_data$fill_color <- figE1_data$fill
+    
+    # Save as csv    
+    write.csv(
+      figE1_data,
+      paste0(save_path, "/", site_name, "_project_output/", file_prefix, panel_num, "_data_", site_name, ".csv"),
+      row.names = FALSE
+    )
+  }
+  
+  return(p)
+}
+
+```
+
+```{r}
+
+# Plot all the panels
+figE1a <- plot_figE1_panels(
+  data = analytic_cohort,
+  fill_column = "triage_location_formatted",
+  legend_title = "Initial Admission Location",
+  fill_values = TRIAGE_COLORS,
+  panel_num = "a",
+  site_name = site,
+  save_path = project_location
+)
+
+figE1b <- plot_figE1_panels(
+  data = analytic_cohort,
+  fill_column = "last_niv_device",
+  legend_title = "NIV Type",
+  fill_values = c("orange", "cadetblue", "darkgreen"),
+  panel_num = "b",
+  site_name = site,
+  save_path = project_location
+)
+
+figE1c <- plot_figE1_panels(
+  data = analytic_cohort,
+  fill_column = "physiologic_type",
+  legend_title = "Physiologic Type",
+  fill_values = c("lightblue", "plum1", "lavender", "khaki", "grey"),
+  panel_num = "c",
+  site_name = site,
+  save_path = project_location
+)
+
+figE1c
+
+```
