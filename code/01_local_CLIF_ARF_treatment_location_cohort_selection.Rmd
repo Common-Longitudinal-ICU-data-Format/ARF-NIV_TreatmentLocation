@@ -182,8 +182,8 @@ PRESSOR_LIST <- c("norepinephrine", "epinephrine","phenylephrine", "vasopressin"
 DAYS_OFF_CUTOFF <- 28 # Set the number of days to look at after starting NIV to see how many of those days are off NIV or worse
 
 # Cutoffs for inclusion and exclusion criteria for analytic cohort
-MIN_SF_INCLUSION <- 150
-MIN_PF_INCLUSION <- 250
+MIN_SF_INCLUSION <- 148
+MIN_PF_INCLUSION <- 100
 MAX_PACO2_INCLUSION <- 60
 MIN_PH_INCLUSION <- 7.25
 MIN_GCS_INCLUSION <- 9
