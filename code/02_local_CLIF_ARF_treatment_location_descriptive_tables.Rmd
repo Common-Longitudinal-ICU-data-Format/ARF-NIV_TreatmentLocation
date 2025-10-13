@@ -21,10 +21,14 @@ packages <- c("duckdb",
               "collapse", 
               "tictoc",
               "gtsummary",
+              # lack of gt
+              "gt",
               "zoo",
               "yaml",
               "rprojroot",
-              "comorbidity")
+              "comorbidity",
+              "rlang")
+
 
 install_if_missing <- function(package) {
   if (!require(package, character.only = TRUE)) {
@@ -63,6 +67,12 @@ if (!dir.exists(paste0(project_location, "/private_tables"))) {
 if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
   dir.create(paste0(project_location,"/", site, "_project_output"))
 }
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/broad"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/broad"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/analytic"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/analytic"))
+}
 ```
 
 # Reading in data
@@ -75,7 +85,17 @@ analytic_cohort <- read_csv(paste0(project_location, "/private_tables/analytic_c
 ```{r Reformat and reorder variables for table display}
 
 
-reformat_cohort_cols <- function(df, traige_location_factors=c("ICU", "IMC", "Ward")) {
+reformat_cohort_cols <- function(df, incl_disch = FALSE) {
+  
+  # Set order of triage location for foactoring
+  traige_location_factors <- c("ICU", "IMC", "Ward")
+  traige_location_imc_factors <- c("ICU (+)", "ICU (-)", "IMC", "Ward (+)", "Ward (-)")
+  
+  if(incl_disch){
+    traige_location_factors <- c(traige_location_factors, "Discharged")
+    traige_location_imc_factors <- c(traige_location_imc_factors, "Discharged")
+  }
+  
   return(df |>
   mutate(
     # Format triage location
@@ -87,6 +107,18 @@ reformat_cohort_cols <- function(df, traige_location_factors=c("ICU", "IMC", "Wa
       TRUE ~ triage_location),
     # Set triage location as factor
     triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+    # Categorize triage location based on IMC availability
+    traige_location_imc_avail = case_when(
+      triage_location_formatted == "ICU" & imc_capable == 1 ~ "ICU (+)",
+      triage_location_formatted == "ICU" ~ "ICU (-)",
+      triage_location_formatted == "IMC" ~ "IMC",
+      triage_location_formatted == "Ward" & imc_capable == 1 ~ "Ward (+)",
+      triage_location_formatted == "Ward" ~ "Ward (-)",
+      triage_location_formatted == "Discharged" ~ "Discharged",
+      TRUE ~ triage_location_formatted
+    ),
+    # Set triage  as factor
+    traige_location_imc_avail = factor(traige_location_imc_avail, levels = traige_location_imc_factors),
     # Factor race
     race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
     # Factor last NIV device
@@ -98,23 +130,33 @@ reformat_cohort_cols <- function(df, traige_location_factors=c("ICU", "IMC", "Wa
   ))
 }
 
-broad_cohort <- reformat_cohort_cols(broad_cohort, traige_location_factors=c("ICU", "IMC", "Ward", "Discharged"))
+broad_cohort <- reformat_cohort_cols(broad_cohort)
 
 analytic_cohort <- reformat_cohort_cols(analytic_cohort)
 ```
 
-# Create table 1 for both the broad cohort and the analytic cohort
-```{r Create table 1 for both the broad cohort and the analytic cohort}
+# Create table 1 and 2 for both the broad cohort and the analytic cohort
+```{r Create table 1 and 2 for both the broad cohort and the analytic cohort}
 
-create_tab1 <- function(df, cohort_prefix){
+create_tab_1_2 <- function(df, cohort_prefix, tab_num){
   
   ### Create HTML table to view ###
   
-  triage_n <- as.numeric(table(df$triage_location_formatted))
+  # Set the variable to stratify based on
+  if (tab_num == 1) {
+    strat_var <- sym("triage_location_formatted")
+  } else if (tab_num == 2) {
+    strat_var <- sym("traige_location_imc_avail")
+  } else {
+    stop("Error: tab_num must be 1 or 2")
+  }
 
-  tab1 <- df |>
+  triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
+
+
+  tab_1_2 <- df |>
     select(
-      triage_location_formatted,
+      !!strat_var,
       age_at_admission,
       is_female,
       first_bmi,
@@ -122,6 +164,7 @@ create_tab1 <- function(df, cohort_prefix){
       elixhauser_total,
       ed_hours,
       last_niv_device,
+      niv_on_admission,
       physiologic_type,
       sf_value,
       pf_value,
@@ -129,7 +172,7 @@ create_tab1 <- function(df, cohort_prefix){
       worst_non_resp_sofa
     ) |>
     tbl_summary(
-      by = triage_location_formatted,
+      by = !!strat_var,
       statistic = list(
         all_continuous() ~ "{mean} ({sd})",
         all_categorical() ~ "{n} ({p}%)"
@@ -142,6 +185,7 @@ create_tab1 <- function(df, cohort_prefix){
         elixhauser_total ~ "Elixhauser comorbidities, mean (SD)",
         ed_hours ~ "Time in ED, hours, mean (SD)",
         last_niv_device ~ "Type of NIV, n (%)",
+        niv_on_admission ~ "Requiring NIV on Admission, n (%)",
         physiologic_type ~ "Physiologic type of ARF, n (%)",
         sf_value ~ "SF Ratio, mean (SD)",
         pf_value ~ "PF Ratio, mean (SD)",
@@ -172,15 +216,15 @@ create_tab1 <- function(df, cohort_prefix){
       text_format = "italic")
   
   # Save as a viewable HTML
-  tab1 |>
+  tab_1_2 |>
     as_gt() |>
-    gtsave(paste0(project_location,"/", site, "_project_output/tab1_", cohort_prefix, "_cohort_", site, ".html"))
+    gtsave(paste0(project_location,"/", site, "_project_output/", cohort_prefix,"/tab_", tab_num,"_", cohort_prefix, "_cohort_", site, ".html"))
   
   
   ### Save as CSVs ###
   
   # Create single table for all variables
-  tab1_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T),
+  tab_1_2_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T),
                            summarize_continuous(df, "first_bmi", "bmi"),
                            summarize_continuous(df, "elixhauser_total", "elix"),
                            summarize_continuous(df, "ed_hours"),
@@ -190,27 +234,28 @@ create_tab1 <- function(df, cohort_prefix){
                            summarize_continuous(df, "worst_non_resp_sofa", "sofa"))
   
   # Output continuous to csv
-  write.csv(tab1_continuous,
+  write.csv(tab_1_2_continuous,
             paste0(
-              project_location,"/", site, "_project_output/tab1_continuous_", cohort_prefix, "_cohort_", site, ".csv"), 
+              project_location,"/", site, "_project_output/", cohort_prefix,"/tab_", tab_num,"_continuous_", cohort_prefix, "_cohort_", site, ".csv"), 
             row.names = FALSE)
   
   # Create single table for all variables
-  tab1_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE),
+  tab_1_2_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE),
                             summarize_categorical(df, "sex_category", nickname = "sex"),
-                            summarize_categorical(df, "last_niv_device", nickname = "niv"),
+                            summarize_categorical(df, "last_niv_device", nickname = "last_niv"),
+                            summarize_categorical(df, "niv_on_admission", nickname = "niv_admiss"),
                             summarize_categorical(df, "physiologic_type", nickname = "physiologic_type"))
   
   
   # Output to csv
-  write.csv(tab1_catagorical,
+  write.csv(tab_1_2_catagorical,
             paste0(
-              project_location,"/", site, "_project_output/tab1_catagorical_", cohort_prefix, "_cohort_", site, ".csv"), 
+              project_location,"/", site, "_project_output/", cohort_prefix,"/tab_", tab_num,"_catagorical_", cohort_prefix, "_cohort_", site, ".csv"), 
             row.names = FALSE)
   
   
   ### View Results ###
-  return(tab1)
+  return(tab_1_2)
 }
 
 summarize_continuous <- function(data, column_name, nickname = NA, include_titles = F, by_column = "triage_location") {
@@ -261,8 +306,14 @@ summarize_categorical <- function(data, column_name, nickname = NA, include_titl
 
 ```
 
+# Create Table 1 for broad and analytic cohorts
 ```{r}
-create_tab1(broad_cohort, "broad")
-create_tab1(analytic_cohort, "analytic")
+create_tab_1_2(broad_cohort, "broad", 1)
+create_tab_1_2(analytic_cohort, "analytic", 1)
 ```
 
+# Create Table 2 for broad and analytic cohorts
+```{r}
+create_tab_1_2(broad_cohort, "broad", 2)
+create_tab_1_2(analytic_cohort, "analytic", 2)
+```

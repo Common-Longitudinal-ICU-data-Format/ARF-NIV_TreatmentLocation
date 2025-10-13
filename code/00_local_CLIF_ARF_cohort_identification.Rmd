@@ -361,10 +361,20 @@ final_cohort[, `:=`(
   row_num = .I - .I[1] + 1
 ), by = hospital_block_id]
 
-
 # Identify the first triage location; set to discharge if index for it does not exist
-final_cohort[, triage_location := ifelse(is.na(triage_idx), "discharge", location_category[triage_idx]), 
-             by = hospital_block_id]
+final_cohort[, `:=`(
+  triage_location = ifelse(
+    is.na(triage_idx),
+    "discharge",
+    location_category[triage_idx]
+  ),
+  triage_location_raw = ifelse(
+    is.na(triage_idx),
+    "discharge",
+    location_name[triage_idx]
+  )
+), by = hospital_block_id]
+
 
 # Only keep rows before triage
 final_cohort <- final_cohort[is.na(triage_idx) | row_num < triage_idx]
@@ -380,6 +390,7 @@ final_cohort <- final_cohort[, {
     stop_ed = max(out_dttm),
     ed_hours = as.numeric(difftime(max(out_dttm), min(in_dttm), units="hours")),
     triage_location = triage_location[1L],
+    triage_location_raw = triage_location_raw[1L],
     first_hospital_id = first_hospital_id[1L],
     first_hospital_type = first_hospital_type[1L],
     last_hospital_id = last_hospital_id[1L],
@@ -646,9 +657,31 @@ final_cohort <- final_cohort |>
 write_log(n_curr=nrow(final_cohort), message="removing patients who have 'allow natural death' as code status at time leaving the ED", new_file=FALSE)
 ```
 
+## Exclusion Criteria: Discharged directly from ED
+```{r Exclusion Criteria: Discharged directly from ED}
+
+# Identify encounters where patients are discharged without any admission
+ed_discharged_cohort <- final_cohort |>
+  filter(tolower(triage_location) == "discharge")
+
+# Remove these encounters from the final cohort
+final_cohort <- final_cohort |>
+  anti_join(ed_discharged_cohort |>
+              select(hospital_block_id),
+            by="hospital_block_id")
+
+# Output to log file and view cohort size
+write_log(n_curr=nrow(final_cohort), message="excluding all patients who were never admitted", new_file=FALSE)
+
+```
+
+
 # Output files defining broad cohort
 ```{r Output final cohort into csv}
 # Send to csv
+# Patients who were immediately discharged
+write_csv(ed_discharged_cohort, file.path(paste0(project_location, "/private_tables"), "ed_discharged_cohort.csv"))
+# Broad cohort
 write_csv(final_cohort, file.path(paste0(project_location, "/private_tables"), "broad_cohort.csv"))
 ```
 

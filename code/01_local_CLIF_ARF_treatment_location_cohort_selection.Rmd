@@ -182,11 +182,14 @@ PRESSOR_LIST <- c("norepinephrine", "epinephrine","phenylephrine", "vasopressin"
 DAYS_OFF_CUTOFF <- 28 # Set the number of days to look at after starting NIV to see how many of those days are off NIV or worse
 
 # Cutoffs for inclusion and exclusion criteria for analytic cohort
-MIN_SF_INCLUSION <- 148
-MIN_PF_INCLUSION <- 100
+MIN_SF_INCLUSION <- 150
+MIN_PF_INCLUSION <- 250
 MAX_PACO2_INCLUSION <- 60
 MIN_PH_INCLUSION <- 7.25
 MIN_GCS_INCLUSION <- 9
+
+# Cutoff for describing hospital as IMC capable
+IMC_CAPABLE_CUTOFF <- 0.05 # 5%
 ```
 
 # Create hospital blocks for all relevant CLIF tables
@@ -199,18 +202,28 @@ hospital_block_key_obj <- arrow::arrow_table(
            hospital_block_id,
            block_start_admit,
            block_end_discharge,
-           discharge_location))
+           discharge_location)) |>
+  # ensure same datatype
+  mutate(patient_id = as.character(patient_id),
+      hospitalization_id = as.character(hospitalization_id))
 
 clif_hospitalization <- clif_hospitalization |>
+  # ensure same datatype
+  mutate(patient_id = as.character(patient_id),
+      hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id", "patient_id")) |>
   compute()
 
 clif_respiratory_support <- clif_respiratory_support |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
 clif_vitals <- clif_vitals |>
   filter(vital_category %in% c("map", "spo2", "weight_kg", "height_cm")) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
@@ -219,28 +232,36 @@ clif_labs <- clif_labs |>
                              "ph_arterial", "ph_venous", 
                              "pco2_arterial", "pco2_venous", "po2_arterial",
                              "platelet_count", "bilirubin_total", "creatinine")) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
 
 clif_patient_assessments <- clif_patient_assessments |>
   filter(assessment_category == "gcs_total")|>
-  # Convert to same type 
-  mutate(hospitalization_id = arrow::cast(hospitalization_id, arrow::float64())) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
 clif_medication_admin_continuous <- clif_medication_admin_continuous |>
   filter(med_category %in% PRESSOR_LIST) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
 clif_adt <- clif_adt |>
   select(hospitalization_id, hospital_id, hospital_type, in_dttm, out_dttm, location_name, location_category, location_type) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
 clif_hospital_diagnosis <- clif_hospital_diagnosis |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
@@ -358,20 +379,21 @@ final_cohort <- final_cohort |>
 # Calculating Elixhauser Comorbidity Scores
 ```{r Calculating Elixhauser Comorbidity Scores}
 
-# Create function to determine elixhauser flags for a given diagnosis code format (e.g., ICD 9 or 10)
+# Calculating Elixhauser Comorbidity Scores
 get_elixhauser_flags <- function(df, icd_version=10){
   
   # Set the expression to search for correct diagnosis code format
   expression <- regex(paste0("icd.*", icd_version,".*"), ignore_case = TRUE)
   
   # Identify rows in diagnoses that use the desired format
-  df <- df |> 
+  df <- df |>
+    # move collect earlier 
+    collect() |> 
     # Only include diagnoses present on admission
     filter(poa_present==1, 
            # Select only rows using correct diagnosis code format
            str_detect(diagnosis_code_format, expression)) |>
-    select(hospital_block_id, diagnosis_code) |>
-    collect()
+    select(hospital_block_id, diagnosis_code)
   
   # If there are no rows of this type, return nothing
   if(nrow(df)==0){
@@ -432,6 +454,34 @@ final_cohort <- final_cohort |>
             by = "hospital_block_id") |>
   # For those with no comorbidities (score would be NA), fill in with default score of 0
   mutate(elixhauser_total = replace_na(elixhauser_total, 0))
+```
+
+# Determining who is on NIV on admission (when leaving the ED)
+```{r Determining who is on NIV on admission}
+# Identify last resp device in the ED
+last_resp_device <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stop_ed) |>
+  left_join(clif_respiratory_support |>
+              # Select only device name and the time
+              select(hospital_block_id, recorded_dttm, device_category),
+            by = "hospital_block_id") |>
+  # Select only respiratory devices within the time of the ED
+  filter(recorded_dttm >= start_ed,
+         recorded_dttm <= stop_ed) |>
+  collect() |>
+  # Group by hospital block, ordering by time
+  arrange(hospital_block_id, recorded_dttm) |>
+  group_by(hospital_block_id) |>
+  # Only select rows where device category is stated
+  filter(!is.na(device_category)) |>
+  # Select the last (most recent) device used in ED
+  slice_max(order_by = recorded_dttm, n=1, with_ties = F) |>
+  mutate(niv_on_admission = ifelse(tolower(device_category) %in% NIV_NAMES, 1, 0)) |>
+  # Select only relevant columns and rename
+  select(hospital_block_id, niv_on_admission, last_ed_device = device_category)
+
+final_cohort <- final_cohort |>
+  left_join(last_resp_device, by="hospital_block_id")
 ```
 
 # Determining physiologic phenotype of ARF
@@ -1305,6 +1355,31 @@ final_cohort <- final_cohort |>
 
 ```
 
+# Categorizing hospitals as IMC capable
+```{r Categorizing hospitals as IMC capable}
+
+hospital_imc_capability <- final_cohort |>
+  # Group by presenting hospital (not block)
+  group_by(first_hospital_id) |>
+  # Categorize rows as has_imc if traige_location == "imc" for any row
+  # Categorize rows as imc_capable == 1 if number of rows for traige_location == "imc" >= IMC_CAPABLE_CUTOFF 
+  summarise(
+    total_rows = n(),
+    imc_rows = sum(as.integer(tolower(triage_location) == "stepdown", na.rm = TRUE)),
+    has_imc = ifelse(imc_rows > 0, 1, 0),
+    imc_capable = ifelse((imc_rows / total_rows) >= IMC_CAPABLE_CUTOFF, 1, 0),
+    .groups = "drop"
+  ) |>
+  # Select only relevant columns
+  select(first_hospital_id, has_imc, imc_capable)
+
+final_cohort <- final_cohort |>
+  # Join with hospital_imc_capability
+  left_join(hospital_imc_capability, by = "first_hospital_id")
+
+```
+
+
 # Save this broad cohort before identifying analytic cohort
 ```{r Save broad cohort}
 write_csv(final_cohort, file.path(paste0(project_location, "/private_tables"), "broad_cohort_with_stratification.csv"))
@@ -1381,11 +1456,12 @@ analytic_cohort <- analytic_cohort |>
 write_log(nrow(analytic_cohort), paste0("removing patients with GCS worse than ", MIN_GCS_INCLUSION))
 
 
-# Exclusion criteria: Direct discharge
-analytic_cohort <- analytic_cohort |>
-  filter(triage_location != "discharge")
-
-write_log(nrow(analytic_cohort), "removing patients who are never admitted (i.e., triage location is discharge)")
+# Commented out because these patients were removed in broad cohort
+# # Exclusion criteria: Direct discharge
+# analytic_cohort <- analytic_cohort |>
+#   filter(triage_location != "discharge")
+# 
+# write_log(nrow(analytic_cohort), "removing patients who are never admitted (i.e., triage location is discharge)")
 
 ```
 

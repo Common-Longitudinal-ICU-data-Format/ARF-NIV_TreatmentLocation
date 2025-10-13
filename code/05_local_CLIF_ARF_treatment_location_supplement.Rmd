@@ -1,0 +1,330 @@
+---
+title: "05_local_CLIF_ARF_treatment_location_supplement"
+author: "Sarah Goldfarb"
+date: "2025-10-13"
+output: html_document
+---
+
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+
+packages <- c("duckdb", 
+              "lubridate", 
+              "tidyverse", 
+              "dplyr",
+              "table1", 
+              "broom", 
+              "arrow", 
+              "rvest", 
+              "readr", 
+              "fst", 
+              "data.table", 
+              "collapse", 
+              "tictoc",
+              "gtsummary",
+              "gt",
+              "zoo",
+              "yaml",
+              "rprojroot")
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+```
+
+# Set global variables
+```{r Set global variables}
+TRIAGE_COLORS <- c(
+    "ICU" = "red",
+    "IMC" = "purple",
+    "Ward" = "blue"
+  )
+
+# Start time
+STUDY_START <- as.POSIXct("2018-01-01", tz=site_time_zone)
+# End time
+STUDY_END <- as.POSIXct("2024-12-31", tz=site_time_zone)
+```
+
+# Create folders if needed
+```{r Create folders if needed, include=FALSE}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+```
+
+# Reading in data
+```{r Read in cohort information}
+broad_cohort <- read_csv(paste0(project_location, "/private_tables/broad_cohort_with_stratification.csv"), show_col_types=FALSE)
+analytic_cohort <- read_csv(paste0(project_location, "/private_tables/analytic_cohort_with_stratification.csv"), show_col_types=FALSE)
+```
+
+
+# Reformat variables for table display
+```{r Reformat and reorder variables for table display}
+reformat_cohort_cols <- function(df, incl_disch = FALSE) {
+  
+  # Set order of triage location for foactoring
+  traige_location_factors <- c("ICU", "IMC", "Ward")
+  
+  if(incl_disch){
+    traige_location_factors <- c(traige_location_factors, "Discharged")
+    traige_location_imc_factors <- c(traige_location_imc_factors, "Discharged")
+  }
+  
+  return(df |>
+  mutate(
+    # Format triage location
+    triage_location_formatted = case_when(
+      triage_location == "icu" ~ "ICU",
+      triage_location == "stepdown" ~ "IMC",
+      triage_location == "ward" ~ "Ward",
+      triage_location == "discharge" ~ "Discharged",
+      TRUE ~ triage_location),
+    # Set triage location as factor
+    triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+    # Factor last NIV device
+    last_niv_device = factor(last_niv_device, levels=c("CPAP", "NIPPV", "High Flow NC")),
+    # Factor type of ARF
+    physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+    
+    
+    # Create a time variable based on presentation date
+    time_x = as.Date(start_ed)
+    
+  ))
+}
+
+broad_cohort <- reformat_cohort_cols(broad_cohort)
+analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+```
+
+
+# Figure E1
+```{r}
+plot_figE1_panels <- function(
+  data,
+  cohort,
+  fill_column,
+  legend_title,
+  fill_values,
+  panel_num,
+  x_var = "time_x",
+  binwidth_days = 60,
+  x_start = STUDY_START,
+  x_end = STUDY_END,
+  x_breaks_months = 12,
+  plot_width = 8,
+  plot_height = 6,
+  dpi = 300,
+  save_path = project_location,
+  site_name = site,
+  file_prefix = "figE1"
+) {
+  
+  p <- ggplot(data, aes(x = !!sym(x_var), fill = !!sym(fill_column))) +
+    geom_histogram(binwidth = binwidth_days, position = "stack", linewidth = 0) +
+    labs(
+      x = "Date",
+      y = "Number of Hospital Blocks",
+      fill = legend_title
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    scale_fill_manual(values = fill_values) +
+    scale_x_date(
+      date_labels = "%-m/%Y",
+      breaks = seq(as.Date(x_start), as.Date(x_end), by = paste0(x_breaks_months, " months"))
+    )
+  
+  # Make sure the path and file name are sent in
+  if (!is.null(save_path) & !is.null(site_name)) {
+    # Save the image of the plot
+    ggsave(
+      filename = paste0(save_path, "/", site_name, "_project_output/", cohort, "/" ,file_prefix, panel_num, "_", site_name, ".jpg"),
+      plot = p,
+      width = plot_width,
+      height = plot_height,
+      dpi = dpi
+    )
+    
+    # Save the data
+    figE1_data <- ggplot_build(p)$data[[1]]
+    # Map numeric groups to factor levels
+    figE1_data[[fill_column]] <- levels(data[[fill_column]])[figE1_data$group]
+    # Keep actual fill color
+    figE1_data$fill_color <- figE1_data$fill
+    
+    # Save as csv    
+    write.csv(
+      figE1_data,
+      paste0(save_path, "/", site_name, "_project_output/", cohort, "/" , file_prefix, panel_num, "_data_", site_name, ".csv"),
+      row.names = FALSE
+    )
+  }
+  
+  return(p)
+}
+
+```
+
+# Plot all Figure E1 panels for analytic cohort
+```{r}
+plot_figE1_panels(
+  data = analytic_cohort,
+  cohort = "analytic",
+  fill_column = "triage_location_formatted",
+  legend_title = "Initial Admission Location",
+  fill_values = TRIAGE_COLORS,
+  panel_num = "a"
+)
+
+plot_figE1_panels(
+  data = analytic_cohort,
+  cohort = "analytic",
+  fill_column = "last_niv_device",
+  legend_title = "NIV Type",
+  fill_values = c("orange", "cadetblue", "darkgreen"),
+  panel_num = "b"
+)
+
+plot_figE1_panels(
+  data = analytic_cohort,
+  cohort = "analytic",
+  fill_column = "physiologic_type",
+  legend_title = "Physiologic Type",
+  fill_values = c("lightblue", "plum1", "lavender", "khaki", "grey"),
+  panel_num = "c"
+)
+
+```
+
+# Plot all Figure E1 panels for broad cohort
+```{r}
+plot_figE1_panels(
+  data = broad_cohort,
+  cohort = "broad",
+  fill_column = "triage_location_formatted",
+  legend_title = "Initial Admission Location",
+  fill_values = TRIAGE_COLORS,
+  panel_num = "a"
+)
+
+plot_figE1_panels(
+  data = broad_cohort,
+  cohort = "broad",
+  fill_column = "last_niv_device",
+  legend_title = "NIV Type",
+  fill_values = c("orange", "cadetblue", "darkgreen"),
+  panel_num = "b"
+)
+
+plot_figE1_panels(
+  data = broad_cohort,
+  cohort = "broad",
+  fill_column = "physiologic_type",
+  legend_title = "Physiologic Type",
+  fill_values = c("lightblue", "plum1", "lavender", "khaki", "grey"),
+  panel_num = "c"
+)
+```
+
+# Table E2: Identify names of each location
+```{r}
+
+calculate_num_units <- function(df, cohort){
+  
+  # Identify all units labelled as ICU
+  icu_unit_names <- df |>
+    filter(triage_location_formatted == "ICU") |>
+    select(icu_units = triage_location_raw) |>
+    distinct()
+  
+  print(icu_unit_names)
+  
+  # Identify all units labelled as IMC
+  imc_unit_names <- df |>
+    filter(triage_location_formatted == "IMC") |>
+    select(imc_units = triage_location_raw) |>
+    distinct()
+  
+  print(imc_unit_names)
+  
+  # Identify all units labelled as Ward
+  ward_unit_names <- df |>
+    filter(triage_location_formatted == "Ward") |>
+    select(ward_units = triage_location_raw) |>
+    distinct()
+    
+  print(ward_unit_names)
+  
+  # Identify number of each
+  site_total <- data.frame(site=site, 
+                    icu_units=nrow(icu_unit_names),
+                    imc_units=nrow(imc_unit_names),
+                    ward_units=nrow(ward_unit_names))
+  print(site_total)
+  
+  return(site_total)
+  
+}
+```
+
+## Names and number of units for analytic cohort
+```{r}
+num_units_analytic <- calculate_num_units(analytic_cohort, "analytic")
+
+write.csv(num_units_analytic,
+          paste0(
+            project_location, "/",
+            site, "_project_output/",
+            "analytic/",
+            "tab_E2_analytic_cohort_", site, ".csv"
+            ), 
+          row.names = FALSE)
+```
+
+
+## Names and number of units for broad cohort
+```{r}
+num_units_broad <- calculate_num_units(broad_cohort, "broad")
+
+write.csv(num_units_broad,
+          paste0(
+            project_location, "/",
+            site, "_project_output/",
+            "broad/",
+            "tab_E2_broad_cohort_", site, ".csv"
+            ), 
+          row.names = FALSE)
+```
