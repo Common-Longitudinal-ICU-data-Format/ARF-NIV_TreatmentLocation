@@ -268,7 +268,8 @@ calculate_num_units <- function(df, cohort){
   icu_unit_names <- df |>
     filter(triage_location_formatted == "ICU") |>
     select(icu_units = triage_location_raw) |>
-    distinct()
+    distinct()|>
+    arrange(icu_units)
   
   print(icu_unit_names)
   
@@ -276,7 +277,8 @@ calculate_num_units <- function(df, cohort){
   imc_unit_names <- df |>
     filter(triage_location_formatted == "IMC") |>
     select(imc_units = triage_location_raw) |>
-    distinct()
+    distinct()|>
+    arrange(imc_units)
   
   print(imc_unit_names)
   
@@ -284,7 +286,8 @@ calculate_num_units <- function(df, cohort){
   ward_unit_names <- df |>
     filter(triage_location_formatted == "Ward") |>
     select(ward_units = triage_location_raw) |>
-    distinct()
+    distinct()|>
+    arrange(ward_units)
     
   print(ward_unit_names)
   

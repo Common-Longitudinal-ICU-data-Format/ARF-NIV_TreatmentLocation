@@ -26,7 +26,9 @@ packages <- c("duckdb",
               "zoo",
               "yaml",
               "rprojroot",
-              "lme4")
+              "lme4",
+              "broom.mixed",
+              "dotwhisker")
 
 install_if_missing <- function(package) {
   if (!require(package, character.only = TRUE)) {
@@ -54,6 +56,18 @@ site <- config$institution
 site_time_zone <- config$time_zone
 file_type <- config$file_type
 ```
+
+# Set global variables
+```{r}
+# Global reference means and SDs (from Johns Hopkins) for scaling continuous variables
+mean_age <- 66      ; sd_age <- 16
+mean_bmi <- 32      ; sd_bmi <- 12
+mean_elix <- 14     ; sd_elix <- 10
+mean_sofa <- 1.5    ; sd_sofa <- 1.6
+mean_sf <- 243      ; sd_sf <- 75
+
+```
+
 
 # Create folders if needed
 ```{r Create folders if needed, include=FALSE}
@@ -146,7 +160,7 @@ run_outcome_regression <- function(data, outcome_var, outcome_type = c("binary",
     "factor(year) + ",
     "factor(season) + ",
     "worst_non_resp_sofa + ",
-    # "sf_value + ",  
+    "sf_value + ",  
     # "pf_value + ",
     "last_niv_device + ",
     "first_hospital_type"
@@ -203,23 +217,185 @@ run_outcome_regression <- function(data, outcome_var, outcome_type = c("binary",
 }
 ```
 
+# Scaling continuous variables for regression
+```{r}
+# Scaling continuous variables based on Johns Hopkins data for model stability and comparability
+analytic_patients_scaled <- analytic_patients %>%
+  mutate(
+    age_at_admission = (age_at_admission - mean_age) / sd_age,
+    first_bmi        = (first_bmi - mean_bmi) / sd_bmi,
+    elixhauser_total = (elixhauser_total - mean_elix) / sd_elix,
+    worst_non_resp_sofa = (worst_non_resp_sofa - mean_sofa) / sd_sofa,
+    sf_value = (sf_value - mean_sf) / sd_sf
+  )
+```
 
 ```{r}
-model_death_hospice <- run_outcome_regression(
-  data = analytic_patients,
+plot_regression_results <- function(data, outcome_var, outcome_type = c("binary", "continuous"),
+                                    plot_title = NULL, save_plot_path = NULL, save_csv_path = NULL,
+                                    width = 10, height = 10, dpi = 600, 
+                                    dot_size = 2, whisker_size = 1.5, vline_size = 1) {
+  
+  outcome_type <- match.arg(outcome_type)
+  
+  # Run the regression
+  model_res <- run_outcome_regression(data = data,
+                                      outcome_var = outcome_var,
+                                      outcome_type = outcome_type)
+  
+  # Get total number of rows used in the model
+  n_total <- nobs(model_res$model)
+
+  
+  # Tidy results
+  tidy_res <- tidy(model_res$model, effects = "fixed", conf.int = TRUE) # need to add n later
+  
+  # If binary outcome
+  if (outcome_type == "binary") {
+    tidy_res <- tidy_res |>
+      mutate(
+        estimate = exp(estimate),
+        conf.low = exp(conf.low),
+        conf.high = exp(conf.high)
+      )
+    xintercept_val <- 1
+    xlab_val <- "Odds Ratio (95% CI)"
+    
+    # Identify total number of times the outcome occured
+    outcome_used <- model.frame(model_res$model)[[outcome_var]]
+    n_events <- sum(outcome_used == 1, na.rm = TRUE)
+
+  } 
+  # If continuous outcome
+  else {
+    xintercept_val <- 0
+    xlab_val <- "Mean difference in log outcome"
+    
+    # Set number of events to NA since continuous
+    n_events <- NA
+  }
+  
+  # Add n to tidy results
+  tidy_res <- tidy_res |>
+    mutate(
+      n_total = n_total,
+      n_events = n_events,
+      site = site
+    )
+
+  
+  # Add groups and clean term names
+  plot_data <- tidy_res %>%
+    mutate(
+      group = case_when(
+        grepl("^triage_location_formatted", term) ~ "Initial ED disposition location",
+        grepl("^race_summary", term) ~ "Race (vs. White)",
+        grepl("^factor\\(year\\)", term) ~ "Year (vs. 2018)",
+        grepl("^factor\\(season\\)", term) ~ "Season (vs. Autumn)",
+        grepl("^last_niv_device", term) ~ "NIV device (vs. CPAP)",
+        grepl("^first_hospital_type", term) ~ "Hospital type (vs. Academic)",
+        TRUE ~ "Other covariates"
+      ),
+      term = gsub("triage_location_formatted", "", term),
+      term = gsub("race_summary", "", term),
+      term = gsub("factor\\(year\\)", "", term),
+      term = gsub("factor\\(season\\)", "", term),
+      term = gsub("last_niv_device", "", term),
+      term = gsub("first_hospital_type", "", term),
+      term = gsub("is_female", "Female (vs. Male)", term),
+      term = gsub("age_at_admission", "Age (scaled)", term),
+      term = gsub("first_bmi", "BMI (scaled)", term),
+      term = gsub("elixhauser_total", "Comorbidity index (scaled)", term),
+      term = gsub("worst_non_resp_sofa", "Non-resp SOFA (scaled)", term),
+      term = gsub("sf_value", "SF Ratio (scaled)", term)
+    )
+  
+  # Factor for ordered facets
+  plot_data$group <- factor(
+    plot_data$group,
+    levels = c(
+      "Initial ED disposition location",
+      "Race (vs. White)",
+      "Year (vs. 2018)",
+      "Season (vs. Autumn)",
+      "NIV device (vs. CPAP)",
+      "Hospital type (vs. Academic)",
+      "Other covariates"
+    )
+  )
+  
+  # Set default plot title if not provided
+  if (is.null(plot_title)) {
+    plot_title <- paste("Adjusted associations with", outcome_var)
+  }
+  
+  # Make plot
+  p <- dwplot(plot_data, by_legend = FALSE,
+            dot_args = list(size = dot_size),
+            whisker_args = list(size = whisker_size)) +
+    facet_grid(group ~ ., scales = "free_y", space = "free_y", switch = "y") +
+    geom_vline(xintercept = xintercept_val, linetype = "dashed", linewidth = vline_size) +
+    theme_minimal(base_size = 12) +
+    xlab(xlab_val) +
+    ylab("") +
+    ggtitle(plot_title) +
+    theme(
+      strip.placement = "outside",
+      strip.text.y.left = element_text(angle = 0, face = "bold", hjust = 0),
+      panel.spacing.y = unit(1, "lines"),
+      strip.background = element_blank(),
+      legend.position = "none"
+    )
+  
+  # Save plot if path is provided
+  if (!is.null(save_plot_path)) {
+    ggsave(filename = save_plot_path, plot = p, width = width, height = height, dpi = dpi)
+  }
+  
+  # Save tidy table if path is provided
+  if (!is.null(save_csv_path)) {
+    write.csv(tidy_res, file = save_csv_path, row.names = FALSE)
+  }
+  
+  return(list(
+    model = model_res$model,
+    tidy_table = tidy_res,
+    plot = p
+  ))
+}
+
+```
+
+
+```{r}
+# For death/hospice (binary)
+res_death <- plot_regression_results(
+  data = analytic_patients_scaled,
   outcome_var = "death_hospice",
-  outcome_type = "binary"
+  outcome_type = "binary",
+  plot_title = "Adjusted Odds Ratios for Death/Hospice",
+  save_plot_path = paste0(project_location,"/", site, "_project_output/analytic/fig_3a_", site, ".jpg"),
+  save_csv_path  = paste0(project_location,"/", site, "_project_output/analytic/fig_3a_", site, "_data.csv")
 )
 
 
-model_los <- run_outcome_regression(
-  data = analytic_patients,
+res_death$tidy_table  # view table
+res_death$plot        # view plot
+
+```
+
+```{r}
+res_los <- plot_regression_results(
+  data = analytic_patients_scaled,
   outcome_var = "los_pen_logged",
-  outcome_type = "continuous"
+  outcome_type = "continuous",
+  plot_title = "Adjusted Associations with Log-Transformed LOS",
+  save_plot_path = paste0(project_location,"/", site, "_project_output/analytic/fig_3b_", site, ".jpg"),
+  save_csv_path  = paste0(project_location,"/", site, "_project_output/analytic/fig_3b_", site, "_data.csv")
 )
 
-# View summaries
-summary(model_death_hospice$model)
-summary(model_los$model)
+res_los$tidy_table  # view table
+res_los$plot        # view plot
+
 ```
 
