@@ -9,7 +9,7 @@ Before running the code for this project, please upload the file [`project_outli
 ├── config/
 │   └── config.yaml
 ├── 00_local_CLIF_ARF_cohort_identification.Rmd
-├── 01_local_CLIF_ARF_treatment_location_stratification.Rmd
+├── 01_local_CLIF_ARF_treatment_cohort_selection.Rmd
 ├── ... [all other Rmd files listed here]
 ├── project_outlier_thresholds.csv
 └── ...

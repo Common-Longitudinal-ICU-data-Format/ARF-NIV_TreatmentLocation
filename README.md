@@ -43,14 +43,16 @@ The following tables are required:
 - Intubation or tracheostomy while in the ED
 - Code status of "allow natural death" at time of leaving the ED (e.g., admission)
 - Patient still admitted by end-point of study
+- Patient never admitted to the hospital
 
-**Further Cohort Selection Criteria (to be used for outcome analyses):**
+**Further Cohort Selection Criteria (for analytic cohort):**
 - Continuous vasopressors received while in the ED
+- Missing SF ratio or pH
 - Worst SF ratio in the ED < 150
 - Worst PF ratio in the ED < 250
 - Worst PaCO2 > 60 and worst pH < 7.25 in the ED
 - Last GCS in the ED < 9
-- Patient discharged from the ED without admission
+- Patient presented to a hospital without an IMC-admitting ability
 
 ## Expected Results
 
@@ -60,7 +62,7 @@ The following tables are required:
 
 Additionally, many csv and html files will output to the `[SITENAME]_project_output` folder, which will be named according to table number, which cohort was being used, and the site name.
 
-**Final project results should be saved in the `/project_tables/` directory.**
+**Final project results should be saved in the shared box [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000).**
 
 ## Detailed Instructions for running the project
 
@@ -74,4 +76,4 @@ Detailed instructions on the code workflow are provided in the [code directory](
 
 ## 2. Deposit results
 
-Please share your results by copy/pasting the entire `[SITE_NAME_project_output]` folder that you generated into the folder: [`output/`](output/)
+Please share your results by copy/pasting the entire `[SITE_NAME_project_output]` folder that you generated into our shared box folder: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)

@@ -12,7 +12,7 @@
       ├── config/
       │   └── config.yaml
       ├── 00_local_CLIF_ARF_cohort_identification.Rmd
-      ├── 01_local_CLIF_ARF_treatment_location_stratification.Rmd
+      ├── 01_local_CLIF_ARF_treatment_location_cohort_selection.Rmd
       ├── ... [all other Rmd files listed here]
       ├── project_outlier_thresholds.csv
       └── ...
@@ -35,7 +35,7 @@
    - `broad_cohort.csv`: Basic table of included patients
    - `hospital_block_key.csv`: Mapping table that links individual hospitalizations to grouped hospital episodes
 
-2. Run the `01_local_CLIF_ARF_treatment_location_descriptive_tables.Rmd` script
+2. Run the `01_local_CLIF_ARF_treatment_location_cohort_selection.Rmd` script
 
    **This script should:**
    - Classify physiologic phenotypes of ARF
@@ -68,21 +68,19 @@
    - `analytic_cohort_with_stratification.csv`
    
    **Output:**
-   - Various csv and html files (all including "tab1" in the name) with summarized demographic data
+   - Various csv and html files (all including "tab_1" in the name) with summarized demographic data
    
-4. Run the `03_local_CLIF_ARF_treatment_location_outcomes.Rmd` script
+4. Run the `03_local_CLIF_ARF_treatment_location_outcomes.Rmd`, `04_local_CLIF_ARF_treatment_location_regressions.Rmd`, and `05_local_CLIF_ARF_treatment_location_supplement.Rmd` scripts
 
    **This script should:**
    - Summarize outcomes between groups
    
-   **Script:** [`code/03_local_CLIF_ARF_treatment_location_outcomes.Rmd`](03_local_CLIF_ARF_treatment_location_outcomes.Rmd)
+   **Scripts:** [`code/03_local_CLIF_ARF_treatment_location_outcomes.Rmd`](03_local_CLIF_ARF_treatment_location_outcomes.Rmd), [`code/04_local_CLIF_ARF_treatment_location_regressions.Rmd`](04_local_CLIF_ARF_treatment_location_regressions.Rmd), and [`code/05_local_CLIF_ARF_treatment_location_supplement.Rmd`](05_local_CLIF_ARF_treatment_location_supplement.Rmd)
    
    **Input:**
    - `analytic_cohort_with_stratification.csv`
    
    **Output:**
-   - Various csv and html files with summarized outcome data
-
-5. TODO
+   - Various csv, html, and jpg files with summarized outcome data
 
 **Note that all summarized output that must be shared will be in the `[SITE_NAME_project_output]` directory; private, patient-level data will stay in the `private_tables` folder and should not be shared**
