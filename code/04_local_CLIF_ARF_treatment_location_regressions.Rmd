@@ -60,11 +60,12 @@ file_type <- config$file_type
 # Set global variables
 ```{r}
 # Global reference means and SDs (from Johns Hopkins) for scaling continuous variables
-mean_age <- 66      ; sd_age <- 16
+mean_age <- 65      ; sd_age <- 15
 mean_bmi <- 32      ; sd_bmi <- 12
-mean_elix <- 14     ; sd_elix <- 10
+mean_elix <- 14     ; sd_elix <- 9
 mean_sofa <- 1.5    ; sd_sofa <- 1.6
-mean_sf <- 243      ; sd_sf <- 75
+mean_sf <- 232      ; sd_sf <- 62
+mean_ph <- 7.323    ; sd_ph <- 0.0698
 
 ```
 
@@ -122,7 +123,6 @@ reformat_cohort_cols <- function(df) {
   
 }
 
-
 analytic_cohort <- reformat_cohort_cols(analytic_cohort)
 ```
 
@@ -161,8 +161,7 @@ run_outcome_regression <- function(data, outcome_var, outcome_type = c("binary",
     "factor(season) + ",
     "worst_non_resp_sofa + ",
     "sf_value + ",  
-    # "pf_value + ",
-    "last_niv_device + ",
+    "ph_value + ",
     "first_hospital_type"
   )
   
@@ -226,7 +225,8 @@ analytic_patients_scaled <- analytic_patients %>%
     first_bmi        = (first_bmi - mean_bmi) / sd_bmi,
     elixhauser_total = (elixhauser_total - mean_elix) / sd_elix,
     worst_non_resp_sofa = (worst_non_resp_sofa - mean_sofa) / sd_sofa,
-    sf_value = (sf_value - mean_sf) / sd_sf
+    sf_value = (sf_value - mean_sf) / sd_sf,
+    ph_value = (ph_value - mean_ph) / sd_ph
   )
 ```
 
@@ -292,7 +292,6 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
         grepl("^race_summary", term) ~ "Race (vs. White)",
         grepl("^factor\\(year\\)", term) ~ "Year (vs. 2018)",
         grepl("^factor\\(season\\)", term) ~ "Season (vs. Autumn)",
-        grepl("^last_niv_device", term) ~ "NIV device (vs. CPAP)",
         grepl("^first_hospital_type", term) ~ "Hospital type (vs. Academic)",
         TRUE ~ "Other covariates"
       ),
@@ -300,14 +299,14 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
       term = gsub("race_summary", "", term),
       term = gsub("factor\\(year\\)", "", term),
       term = gsub("factor\\(season\\)", "", term),
-      term = gsub("last_niv_device", "", term),
       term = gsub("first_hospital_type", "", term),
       term = gsub("is_female", "Female (vs. Male)", term),
       term = gsub("age_at_admission", "Age (scaled)", term),
       term = gsub("first_bmi", "BMI (scaled)", term),
       term = gsub("elixhauser_total", "Comorbidity index (scaled)", term),
       term = gsub("worst_non_resp_sofa", "Non-resp SOFA (scaled)", term),
-      term = gsub("sf_value", "SF Ratio (scaled)", term)
+      term = gsub("sf_value", "SF Ratio (scaled)", term),
+      term = gsub("ph_value", "pH (scaled)", term)
     )
   
   # Factor for ordered facets
@@ -318,7 +317,6 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
       "Race (vs. White)",
       "Year (vs. 2018)",
       "Season (vs. Autumn)",
-      "NIV device (vs. CPAP)",
       "Hospital type (vs. Academic)",
       "Other covariates"
     )
@@ -363,11 +361,11 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
     plot = p
   ))
 }
-
 ```
 
 
 ```{r}
+
 # For death/hospice (binary)
 res_death <- plot_regression_results(
   data = analytic_patients_scaled,

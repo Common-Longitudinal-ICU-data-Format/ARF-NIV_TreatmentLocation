@@ -270,6 +270,8 @@ clif_hospital_diagnosis <- clif_hospital_diagnosis |>
 # Merge with patient information
 ```{r Merge with patient information}
 final_cohort <- arrow::arrow_table(final_cohort) |>
+  # Ensure same data type
+  mutate(patient_id = as.character(patient_id)) |>
   # Load in all patient information
   inner_join(
     clif_patient |> select(patient_id, race_category, ethnicity_category, sex_category),
@@ -779,19 +781,25 @@ rm(fio2_values, pao2_values, pf_ratios)
 
 ## Categorize physiologic categories
 ```{r Categorize physiologic categories}
-# These ones will not add to 100%
+
 final_cohort <- final_cohort |>
   mutate(
     # Define patients as hypoxic if meeting hypoxic criteria
-    is_hypoxic = ifelse(sf_value <= SF_RATIO_CUTOFF | pf_value <= PF_RATIO_CUTOFF, 1, 
-                             ifelse(sf_value > SF_RATIO_CUTOFF | pf_value > PF_RATIO_CUTOFF, 0, NA_integer_)),
+    # Set up without ifelse and | to avoid issues with NA values for SF and PF
+    is_hypoxic = case_when(
+      sf_value <= SF_RATIO_CUTOFF ~ 1,
+      pf_value <= PF_RATIO_CUTOFF ~ 1,
+      sf_value >= SF_RATIO_CUTOFF ~ 0,
+      pf_value >= PF_RATIO_CUTOFF ~ 0,
+      TRUE ~ NA_integer_
+    ),
     # Define patients as "Undefined" if they are missing hypoxic or hypercapnic
     is_undefined = ifelse(is.na(is_hypercapnic) | is.na(is_hypoxic), 1, 0),
     # Define patients who are "Mixed" meaning they meet criteria for both hyopxia and hypercapnia
     is_mixed = ifelse(is_undefined, NA_integer_, ifelse(is_hypercapnic & is_hypoxic, 1, 0)),
     # Define patients who are proven neither nor hyopxia and hypercapnia
     is_neither = ifelse(is_undefined, NA_integer_, ifelse(!is_hypercapnic & !is_hypoxic, 1, 0))
-    )
+  )
 
 # Generally categorizing phenotype, these will add to 100%
 # Assumes if a patient is hypoxic and has no hypercapnia data, only hypoxic (and vice versa)
@@ -1415,6 +1423,7 @@ write_log(message=paste0("Analytic cohort size log for ", site), new_file=TRUE)
 
 ```
 
+
 # Identify Analytic Cohort
 ```{r Identify Analytic Cohort}
 
@@ -1423,6 +1432,20 @@ analytic_cohort <- final_cohort |>
   filter(pressor_in_ed == FALSE)
 
 write_log(nrow(analytic_cohort), "removing patients on continuous pressors in the ED")
+
+# Exclusion criteria: Missing SF ratio
+analytic_cohort <- analytic_cohort |>
+  # Remove cases where  SF is NA
+  filter(!(is.na(sf_value)))
+
+write_log(nrow(analytic_cohort), "removing patients without valid SF value during stability window")
+
+# Exclusion criteria: Missing pH 
+analytic_cohort <- analytic_cohort |>
+  # Remove cases where  pH is NA
+  filter(!(is.na(ph_value)))
+
+write_log(nrow(analytic_cohort), "removing patients without valid pH value during stability window")
 
 # Exclusion criteria: Worst SF < inclusion cutoff
 analytic_cohort <- analytic_cohort |>
@@ -1455,6 +1478,11 @@ analytic_cohort <- analytic_cohort |>
 
 write_log(nrow(analytic_cohort), paste0("removing patients with GCS worse than ", MIN_GCS_INCLUSION))
 
+analytic_cohort <- analytic_cohort |>
+  # Remove cases where patient presented to a non "IMC capable" hospital
+  filter(imc_capable == 1)
+
+write_log(nrow(analytic_cohort), paste0("removing patients who presented to hospitals without IMC capability"))
 
 # Commented out because these patients were removed in broad cohort
 # # Exclusion criteria: Direct discharge
