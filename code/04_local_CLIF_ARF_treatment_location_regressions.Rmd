@@ -161,8 +161,8 @@ run_outcome_regression <- function(data, outcome_var, outcome_type = c("binary",
     "factor(season) + ",
     "worst_non_resp_sofa + ",
     "sf_value + ",  
-    "ph_value + ",
-    "first_hospital_type"
+    "ph_value + " #,
+    # "first_hospital_type"
   )
   
   # Add hospital ID as random effect, if more than 1 hospital in system
@@ -292,14 +292,14 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
         grepl("^race_summary", term) ~ "Race (vs. White)",
         grepl("^factor\\(year\\)", term) ~ "Year (vs. 2018)",
         grepl("^factor\\(season\\)", term) ~ "Season (vs. Autumn)",
-        grepl("^first_hospital_type", term) ~ "Hospital type (vs. Academic)",
+        # grepl("^first_hospital_type", term) ~ "Hospital type (vs. Academic)",
         TRUE ~ "Other covariates"
       ),
       term = gsub("triage_location_formatted", "", term),
       term = gsub("race_summary", "", term),
       term = gsub("factor\\(year\\)", "", term),
       term = gsub("factor\\(season\\)", "", term),
-      term = gsub("first_hospital_type", "", term),
+      # term = gsub("first_hospital_type", "", term),
       term = gsub("is_female", "Female (vs. Male)", term),
       term = gsub("age_at_admission", "Age (scaled)", term),
       term = gsub("first_bmi", "BMI (scaled)", term),
