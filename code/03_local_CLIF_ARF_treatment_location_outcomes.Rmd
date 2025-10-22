@@ -27,7 +27,8 @@ packages <- c("duckdb",
               "yaml",
               "rprojroot",
               "comorbidity",
-              "icd.data")
+              "icd.data",
+              "rlang")
 
 install_if_missing <- function(package) {
   if (!require(package, character.only = TRUE)) {
@@ -371,16 +372,14 @@ create_tab_3_4 <- function(df, cohort_prefix, tab_num){
 
 # Create Table 3 for broad and analytic cohorts
 ```{r}
-create_tab_3_4(analytic_cohort, "broad", 3)
+create_tab_3_4(broad_cohort, "broad", 3)
 create_tab_3_4(analytic_cohort, "analytic", 3)
 ```
 # Create Table 4 for broad and analytic cohorts
 ```{r}
-create_tab_3_4(analytic_cohort, "broad", 4)
+create_tab_3_4(broad_cohort, "broad", 4)
 create_tab_3_4(analytic_cohort, "analytic", 4)
 ```
-
-# NEW
 
 # Plot figure 2
 ```{r Figure 2}
