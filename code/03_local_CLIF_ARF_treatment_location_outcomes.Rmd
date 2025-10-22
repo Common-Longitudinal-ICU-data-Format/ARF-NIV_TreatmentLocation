@@ -172,7 +172,10 @@ reformat_cohort_cols <- function(df, incl_disch = FALSE) {
 }
 
 broad_cohort <- reformat_cohort_cols(broad_cohort)
-analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+
+if(nrow(analytic_cohort) > 1){
+  analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+  }
 ```
 
 ```{r set icd diagnosis}
@@ -188,12 +191,14 @@ icd_descriptions <- rbind(
   # Cast to string for comparison
   mutate(primary_diagnosis = as.character(primary_diagnosis))
 
-# Join diagnosis information with analytic cohort
-analytic_cohort <- analytic_cohort |>
-  left_join(
-    icd_descriptions,
-    by=c("primary_diagnosis", "diagnosis_code_format")
-  )
+if(nrow(analytic_cohort) > 1){
+  # Join diagnosis information with analytic cohort
+  analytic_cohort <- analytic_cohort |>
+    left_join(
+      icd_descriptions,
+      by=c("primary_diagnosis", "diagnosis_code_format")
+    )
+}
 
 # Join diagnosis information with broad cohort
 broad_cohort <- broad_cohort |>
@@ -214,8 +219,10 @@ icd_count_table <- function(df, cohort){
             row.names = FALSE)
 }
 
-icd_count_table(analytic_cohort, "analytic")
-icd_count_table(analytic_cohort, "broad")
+if(nrow(analytic_cohort) > 1){
+  icd_count_table(analytic_cohort, "analytic")
+}
+icd_count_table(broad_cohort, "broad")
 
 ```
 
@@ -345,8 +352,8 @@ create_tab_3_4 <- function(df, cohort_prefix, tab_num){
   ### Save as CSVs ###
   
   # Create single table for all variables
-  tab_3_4_continuous <- cbind(summarize_continuous(analytic_cohort, "los_penalized", "los", T),
-                         summarize_continuous(analytic_cohort, "days_off", "days_off"))
+  tab_3_4_continuous <- cbind(summarize_continuous(df, "los_penalized", "los", T),
+                         summarize_continuous(df, "days_off", "days_off"))
   # Output continuous to csv
   write.csv(tab_3_4_continuous,
             paste0(
@@ -354,11 +361,11 @@ create_tab_3_4 <- function(df, cohort_prefix, tab_num){
             row.names = FALSE)
   
   # Create single table for all variables
-  tab_3_4_catagorical <- cbind(summarize_categorical(analytic_cohort, "death_hospice", nickname = "dh", include_titles = TRUE),
-                          summarize_categorical(analytic_cohort, "death_hospice_28", nickname = "dh_28"),
-                          summarize_categorical(analytic_cohort, "death_hospice_60", nickname = "dh_60"),
-                          summarize_categorical(analytic_cohort, "imv", nickname = "imv"),
-                          summarize_categorical(analytic_cohort, "was_escalated", nickname = "was_escalated"))
+  tab_3_4_catagorical <- cbind(summarize_categorical(df, "death_hospice", nickname = "dh", include_titles = TRUE),
+                          summarize_categorical(df, "death_hospice_28", nickname = "dh_28"),
+                          summarize_categorical(df, "death_hospice_60", nickname = "dh_60"),
+                          summarize_categorical(df, "imv", nickname = "imv"),
+                          summarize_categorical(df, "was_escalated", nickname = "was_escalated"))
   # Output continuous to csv
   write.csv(tab_3_4_catagorical,
             paste0(
@@ -373,12 +380,16 @@ create_tab_3_4 <- function(df, cohort_prefix, tab_num){
 # Create Table 3 for broad and analytic cohorts
 ```{r}
 create_tab_3_4(broad_cohort, "broad", 3)
-create_tab_3_4(analytic_cohort, "analytic", 3)
+if(nrow(analytic_cohort) > 1){
+  create_tab_3_4(analytic_cohort, "analytic", 3)
+}
 ```
 # Create Table 4 for broad and analytic cohorts
 ```{r}
 create_tab_3_4(broad_cohort, "broad", 4)
-create_tab_3_4(analytic_cohort, "analytic", 4)
+if(nrow(analytic_cohort) > 1){
+  create_tab_3_4(analytic_cohort, "analytic", 4)
+}
 ```
 
 # Plot figure 2
@@ -456,9 +467,11 @@ make_fig_2 <- function(df, cohort, panel){
 
 # Generate all Figure 2 panels for analytic cohort
 ```{r}
+if(nrow(analytic_cohort) > 1){
 make_fig_2(analytic_cohort, "analytic", "a")
 make_fig_2(analytic_cohort, "analytic", "b")
 make_fig_2(analytic_cohort, "analytic", "c")
+}
 ```
 
 

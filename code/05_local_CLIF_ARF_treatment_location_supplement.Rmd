@@ -124,7 +124,10 @@ reformat_cohort_cols <- function(df, incl_disch = FALSE) {
 }
 
 broad_cohort <- reformat_cohort_cols(broad_cohort)
-analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+
+if(nrow(analytic_cohort) > 1){
+  analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+}
 ```
 
 
@@ -200,6 +203,8 @@ plot_figE1_panels <- function(
 
 # Plot all Figure E1 panels for analytic cohort
 ```{r}
+if(nrow(analytic_cohort) > 1){
+  
 plot_figE1_panels(
   data = analytic_cohort,
   cohort = "analytic",
@@ -226,7 +231,7 @@ plot_figE1_panels(
   fill_values = c("lightblue", "plum1", "lavender", "khaki", "grey"),
   panel_num = "c"
 )
-
+}
 ```
 
 # Plot all Figure E1 panels for broad cohort
@@ -305,6 +310,9 @@ calculate_num_units <- function(df, cohort){
 
 ## Names and number of units for analytic cohort
 ```{r}
+
+if(nrow(analytic_cohort) > 1){
+  
 num_units_analytic <- calculate_num_units(analytic_cohort, "analytic")
 
 write.csv(num_units_analytic,
@@ -315,6 +323,7 @@ write.csv(num_units_analytic,
             "tab_E2_analytic_cohort_", site, ".csv"
             ), 
           row.names = FALSE)
+}
 ```
 
 

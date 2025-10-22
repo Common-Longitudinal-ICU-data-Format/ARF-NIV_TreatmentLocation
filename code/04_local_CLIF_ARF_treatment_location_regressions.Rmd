@@ -123,7 +123,11 @@ reformat_cohort_cols <- function(df) {
   
 }
 
+if(nrow(analytic_cohort) > 1){
 analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+}else{
+  stop("Your analytic cohort is empty: proceed to next file (this file is only for analytic cohort)")
+}
 ```
 
 # Randomly select one entry per patient in each cohort

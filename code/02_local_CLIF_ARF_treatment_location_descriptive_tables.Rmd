@@ -132,7 +132,9 @@ reformat_cohort_cols <- function(df, incl_disch = FALSE) {
 
 broad_cohort <- reformat_cohort_cols(broad_cohort)
 
-analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+if(nrow(analytic_cohort) > 0){
+  analytic_cohort <- reformat_cohort_cols(analytic_cohort)
+}
 ```
 
 # Create table 1 and 2 for both the broad cohort and the analytic cohort
@@ -309,11 +311,18 @@ summarize_categorical <- function(data, column_name, nickname = NA, include_titl
 # Create Table 1 for broad and analytic cohorts
 ```{r}
 create_tab_1_2(broad_cohort, "broad", 1)
-create_tab_1_2(analytic_cohort, "analytic", 1)
+
+if(nrow(analytic_cohort) > 1){
+  create_tab_1_2(analytic_cohort, "analytic", 1)
+}
+
 ```
 
 # Create Table 2 for broad and analytic cohorts
 ```{r}
 create_tab_1_2(broad_cohort, "broad", 2)
-create_tab_1_2(analytic_cohort, "analytic", 2)
+
+if(nrow(analytic_cohort) > 1){
+  create_tab_1_2(analytic_cohort, "analytic", 2)
+}
 ```
