@@ -259,6 +259,12 @@ clif_respiratory_support <- clif_respiratory_support |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
+clif_hospital_diagnosis <- clif_hospital_diagnosis |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
 # clif_medication_admin_continuous <- clif_medication_admin_continuous |>
 #   filter(admin_dttm >= as.POSIXct(STUDY_START)) |>
 #   filter(med_group == "vasoactives") |>
@@ -688,7 +694,8 @@ write_csv(final_cohort, file.path(paste0(project_location, "/private_tables"), "
 ```{r Save hospital blocks in file}
 # Keeping only hospital block keys that are included in study cohort
 hospital_block_key <- hospital_block_key |>
-  filter(hospital_block_id  %in% final_cohort$hospital_block_id)
+  filter(hospital_block_id  %in% final_cohort$hospital_block_id) |>
+  mutate(hospitalization_id = as.character(hospitalization_id))
 
 # Save the subset of hospital blocks
 write_csv(hospital_block_key, paste0(project_location, "/private_tables/hospital_block_key.csv"))

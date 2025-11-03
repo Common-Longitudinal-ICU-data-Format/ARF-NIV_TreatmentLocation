@@ -170,7 +170,7 @@ DEATH_PENALTY <- 0.99 # Sets the percentile that death and hospice is penalized 
 # Cutoffs for physiologic types of ARF
 PH_CUTOFF <- 7.30 # Cutoff for primary hypercapnic
 PCO2_CUTOFF <- 50 # PCO2 cutoff for primary hypercapnic
-SF_RATIO_CUTOFF <- 315 # SF ratio for pure hypoxemic
+SF_RATIO_CUTOFF <- 300 # SF ratio for pure hypoxemic
 SPO2_MAX <- 97 # SpO2 max cutoff to use SF ratio
 SPO2_MIN <- 70 # SpO2 min cutoff to use SF ratio
 PF_RATIO_CUTOFF <- 300 # PF ratio for pure hypoxemic
@@ -183,7 +183,7 @@ DAYS_OFF_CUTOFF <- 28 # Set the number of days to look at after starting NIV to 
 
 # Cutoffs for inclusion and exclusion criteria for analytic cohort
 MIN_SF_INCLUSION <- 150
-MIN_PF_INCLUSION <- 250
+MIN_PF_INCLUSION <- NA
 MAX_PACO2_INCLUSION <- 60
 MIN_PH_INCLUSION <- 7.25
 MIN_GCS_INCLUSION <- 9
@@ -195,17 +195,18 @@ IMC_CAPABLE_CUTOFF <- 0.05 # 5%
 # Create hospital blocks for all relevant CLIF tables
 ```{r Add hospital blocks to all relevant CLIF tables}
 
-hospital_block_key_obj <- arrow::arrow_table(
+hospital_block_key_obj <- 
+  arrow::arrow_table(
   hospital_block_key |>
     select(patient_id,
            hospitalization_id,
            hospital_block_id,
            block_start_admit,
            block_end_discharge,
-           discharge_location)) |>
+           discharge_location) |>
   # ensure same datatype
   mutate(patient_id = as.character(patient_id),
-      hospitalization_id = as.character(hospitalization_id))
+      hospitalization_id = as.character(hospitalization_id)))
 
 clif_hospitalization <- clif_hospitalization |>
   # ensure same datatype
@@ -264,6 +265,7 @@ clif_hospital_diagnosis <- clif_hospital_diagnosis |>
   mutate(hospitalization_id = as.character(hospitalization_id)) |>
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
+
 
 ```
 
@@ -1433,20 +1435,6 @@ analytic_cohort <- final_cohort |>
 
 write_log(nrow(analytic_cohort), "removing patients on continuous pressors in the ED")
 
-# Exclusion criteria: Missing SF ratio
-analytic_cohort <- analytic_cohort |>
-  # Remove cases where  SF is NA
-  filter(!(is.na(sf_value)))
-
-write_log(nrow(analytic_cohort), "removing patients without valid SF value during stability window")
-
-# Exclusion criteria: Missing pH 
-analytic_cohort <- analytic_cohort |>
-  # Remove cases where  pH is NA
-  filter(!(is.na(ph_value)))
-
-write_log(nrow(analytic_cohort), "removing patients without valid pH value during stability window")
-
 # Exclusion criteria: Worst SF < inclusion cutoff
 analytic_cohort <- analytic_cohort |>
   # Keep NAs
@@ -1454,12 +1442,15 @@ analytic_cohort <- analytic_cohort |>
 
 write_log(nrow(analytic_cohort), paste0("removing patients with SF worse than ", MIN_SF_INCLUSION))
 
-# Exclusion criteria: Worst PF < inclusion cutoff
-analytic_cohort <- analytic_cohort |>
-  # Keep NAs
-  filter(is.na(pf_value) | pf_value >= MIN_PF_INCLUSION)
-
-write_log(nrow(analytic_cohort), paste0("removing patients with PF worse than ", MIN_PF_INCLUSION))
+if(!is.na(MIN_PF_INCLUSION))
+{
+  # Exclusion criteria: Worst PF < inclusion cutoff
+  analytic_cohort <- analytic_cohort |>
+    # Keep NAs
+    filter(is.na(pf_value) | pf_value >= MIN_PF_INCLUSION)
+  
+  write_log(nrow(analytic_cohort), paste0("removing patients with PF worse than ", MIN_PF_INCLUSION))
+}
 
 # Exclusion criteria: Worst PaCO2 > inclusion cutoff AND Worst pH < inclusion cutoff
 analytic_cohort <- analytic_cohort |>
@@ -1483,6 +1474,20 @@ analytic_cohort <- analytic_cohort |>
   filter(imc_capable == 1)
 
 write_log(nrow(analytic_cohort), paste0("removing patients who presented to hospitals without IMC capability"))
+
+# Exclusion criteria: Missing SF ratio
+analytic_cohort <- analytic_cohort |>
+  # Remove cases where  SF is NA
+  filter(!(is.na(sf_value)))
+
+write_log(nrow(analytic_cohort), "removing patients without valid SF value during stability window")
+
+# Exclusion criteria: Missing pH 
+analytic_cohort <- analytic_cohort |>
+  # Remove cases where  pH is NA
+  filter(!(is.na(ph_value)))
+
+write_log(nrow(analytic_cohort), "removing patients without valid pH value during stability window")
 
 # Commented out because these patients were removed in broad cohort
 # # Exclusion criteria: Direct discharge
