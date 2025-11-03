@@ -158,7 +158,6 @@ run_outcome_regression <- function(data, outcome_var, outcome_type = c("binary",
     "triage_location_formatted + ",
     "age_at_admission + ",
     "is_female + ",
-    "race_summary + ",
     "first_bmi + ",
     "elixhauser_total + ",
     "factor(year) + ",
@@ -293,14 +292,12 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
     mutate(
       group = case_when(
         grepl("^triage_location_formatted", term) ~ "Initial ED disposition location",
-        grepl("^race_summary", term) ~ "Race (vs. White)",
         grepl("^factor\\(year\\)", term) ~ "Year (vs. 2018)",
         grepl("^factor\\(season\\)", term) ~ "Season (vs. Autumn)",
         # grepl("^first_hospital_type", term) ~ "Hospital type (vs. Academic)",
         TRUE ~ "Other covariates"
       ),
       term = gsub("triage_location_formatted", "", term),
-      term = gsub("race_summary", "", term),
       term = gsub("factor\\(year\\)", "", term),
       term = gsub("factor\\(season\\)", "", term),
       # term = gsub("first_hospital_type", "", term),
@@ -318,7 +315,6 @@ plot_regression_results <- function(data, outcome_var, outcome_type = c("binary"
     plot_data$group,
     levels = c(
       "Initial ED disposition location",
-      "Race (vs. White)",
       "Year (vs. 2018)",
       "Season (vs. Autumn)",
       "Hospital type (vs. Academic)",
