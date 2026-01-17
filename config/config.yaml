@@ -22,6 +22,14 @@ imc_capable_cutoff: 0.05
 study_start: "2018-01-01"
 study_end: "2024-12-31"
 
+# Definitions of respiratory devices
+niv_devices:
+  - "nippv"
+  - "high flow nc"
+niv_free_devices:
+  - "nasal cannula"
+  - "room air"
+  - "trach collar"
 
 # For regression:
 

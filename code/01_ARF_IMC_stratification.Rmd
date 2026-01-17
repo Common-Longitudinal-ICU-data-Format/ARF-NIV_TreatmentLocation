@@ -63,6 +63,11 @@ file_type <- config$file_type
 # Study start and end
 STUDY_START <- as.POSIXct(config$study_start, tz=site_time_zone) # Start time
 STUDY_END <- as.POSIXct(config$study_end, tz=site_time_zone) # End time
+
+# Device names that are included as NIV
+NIV_NAMES <- config$niv_devices 
+# Device names that would be considered "off NIV"
+NIV_FREE_NAMES <- config$niv_free_devices
 ```
 
 ```{r Create folders if needed}
@@ -73,6 +78,9 @@ if (!dir.exists(paste0(project_location, "/private_tables"))) {
 }
 if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
   dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/sensitivity_analysis"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/sensitivity_analysis"))
 }
 ```
 
@@ -122,9 +130,29 @@ if (length(missing_tables) > 0) {
 # Filter only the filenames that are required
 required_filenames <- clif_table_filenames[clif_table_basenames %in% required_files]
 
+# Define the cast function to convert large_string to string
+cast_large_utf8_to_utf8 <- function(x) {
+  # Only applies to Arrow objects that have a schema()
+  # (open_dataset() returns an Arrow Dataset / query)
+  sch <- arrow::schema(x)
+
+  large_cols <- vapply(
+    sch$fields,
+    function(f) f$type$ToString() %in% c("large_string", "large_utf8"),
+    logical(1)
+  )
+
+  cols_to_cast <- sch$names[large_cols]
+  if (length(cols_to_cast) == 0) return(x)
+
+  x %>% mutate(across(all_of(cols_to_cast), ~ arrow::cast(.x, arrow::utf8())))
+}
+
 # Read the required files into a list of data frames
 if (file_type == "parquet") {
   data_list <- lapply(required_filenames, open_dataset)
+  # Apply cast function to normalize Arrow string types right after import
+  data_list <- lapply(data_list, cast_large_utf8_to_utf8)
 } else if (file_type == "csv") {
   data_list <- lapply(required_filenames, read_csv)
 } else if (file_type == "fst") {
@@ -156,9 +184,6 @@ outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/pro
 
 # Specify global variable names
 ```{r Specify global parameters}
-
-NIV_NAMES <- c("nippv", "high flow nc") # Device names that are included as NIV
-NIV_FREE_NAMES <- c("nasal cannula", "room air") # Device names that would be considered "off NIV"; "face mask" removed
 
 DEATH_PENALTY <- 0.99 # Sets the percentile that death and hospice is penalized to
 
@@ -362,9 +387,12 @@ elixhauser_scores <- rbind(get_elixhauser_flags(clif_hospital_diagnosis, 9), get
   # Group by hospital block and condense to one row per block (if flag is = 1 for either, set as 1; otherwise 0)
   group_by(hospital_block_id) |>
   summarize(across(everything(), ~as.integer(any(. ==1))), .groups="drop") |>
-  ungroup() |>
+  ungroup() 
+
+# Calculate index and counts
+elixhauser_scores <- elixhauser_scores |>
   # Calculate the overall score, using van Walraven et al. (2009) weights
-  mutate(elixhauser_total = 
+  mutate(elixhauser_index = 
            chf * 7 + # Congestive heart failure
            carit * 5 + # Cardiac arrhythmia
            valv * -1 + # Valvular disease
@@ -374,8 +402,7 @@ elixhauser_scores <- rbind(get_elixhauser_flags(clif_hospital_diagnosis, 9), get
            para * 7 + # Paralysis
            ond * 6 + # Other neurological disorders
            cpd * 3 + # Chronic pulmonary disease
-           diabunc * 0 + # Uncomplicated diabetes
-           diabc * 0 + # Complicated diabetes
+           min(diabunc+diabc, 1) * 0  + # All forms of diabetes
            hypothy * 0 + # Hypothyroidism
            rf * 5 + # Renal failure
            ld * 11 + # Liver disease
@@ -394,16 +421,44 @@ elixhauser_scores <- rbind(get_elixhauser_flags(clif_hospital_diagnosis, 9), get
            alcohol * 0 + # Alcohol abuse
            drug * -7 + # Drug abuse
            psycho * 0 + # Psychosis
-           depre * -3 # Depression
+           depre * -3, # Depression
+         elixhauser_count = 
+           chf + # Congestive heart failure
+           carit + # Cardiac arrhythmia
+           valv + # Valvular disease
+           pcd + # Pulmonary circulation disorders
+           pvd + # Peripheral vascular disease
+           min(hypunc+hypc, 1) + # All forms of HTN
+           para + # Paralysis
+           ond + # Other neurological disorders
+           cpd + # Chronic pulmonary disease
+           min(diabunc+diabc, 1) + # All forms of diabetes
+           hypothy + # Hypothyroidism
+           rf + # Renal failure
+           ld + # Liver disease
+           pud + # Peptic ulcer disease
+           aids + # HIV/AIDS
+           lymph + # Lymphoma
+           metacanc + # Metastatic cancer
+           solidtum + # Solid tumor
+           rheumd + # Rheumatoid arthritis/collagen vascular disease
+           coag + # Coagulopathy
+           obes + # Obesity
+           wloss+ # Weight loss
+           fed + # Fluid and electrolyte disorders
+           blane + # Blood loss anemia
+           dane + # Deficiency anemia
+           alcohol + # Alcohol abuse
+           drug + # Drug abuse
+           psycho + # Psychosis
+           depre # Depression
            )
 
 # Join with current cohort information
 final_cohort <- final_cohort |>
   left_join(elixhauser_scores |> 
-              select(hospital_block_id, elixhauser_total),
-            by = "hospital_block_id") |>
-  # For those with no comorbidities (score would be NA), fill in with default score of 0
-  mutate(elixhauser_total = replace_na(elixhauser_total, 0))
+              select(hospital_block_id, elixhauser_index, elixhauser_count),
+            by = "hospital_block_id")
 ```
 
 # Determining who is on NIV on admission (when leaving the ED)
@@ -1388,6 +1443,44 @@ final_cohort_trimmed <- final_cohort |>
 
 # Write
 write_csv(final_cohort_trimmed, file.path(paste0(project_location, "/private_tables"), "one_encounter_per_pt_with_stratification.csv"))
+```
+
+# Sensitivity analysis with removing COVID pandemic time period
+# COVID pandemic time period defined by proning paper (3/1/2020 through 2/28/2022)
+```{r}
+final_cohort_no_pandemic <- final_cohort |>
+  filter(start_ed < as.POSIXct("2020-03-01") |
+         start_ed > as.POSIXct("2022-02-28"))
+
+write_csv(final_cohort_no_pandemic, file.path(paste0(project_location, "/private_tables"), "no_pandemic_encounters_with_stratification.csv"))
+
+# Cohort size for no pandemic
+cohort_size <- read_csv(paste0(project_location, "/", site, "_project_output/", site, "_cohort_size.csv"), show_col_types=FALSE) |>
+  add_row(
+    step = 10,
+    description = "Sensitivity Analysis: Exclude pandemic period (3/1/2020 through 2/28/2022)",
+    n_encounters = nrow(final_cohort_no_pandemic),
+    n_patients = nrow(final_cohort_no_pandemic |> select(patient_id) |> distinct())
+  )
+
+# Output cohort size for non-pandemic
+write_csv(cohort_size, file.path(paste0(project_location, "/", site,"_project_output/sensitivity_analysis/"), paste0(site,"_no_covid_cohort_size.csv")))
+
+
+# Select one encounter per patient
+
+# Set seed for reproducibility
+set.seed(1)
+
+# Randomly select one row per patient
+final_cohort_no_pandemic_trimmed <- final_cohort_no_pandemic |>
+  group_by(patient_id) |>
+  slice_sample(n = 1) |>
+  ungroup()
+
+# Write
+write_csv(final_cohort_no_pandemic_trimmed, file.path(paste0(project_location, "/private_tables"), "no_pandemic_one_encounter_per_pt_with_stratification.csv"))
+
 ```
 
 ```{r End time}

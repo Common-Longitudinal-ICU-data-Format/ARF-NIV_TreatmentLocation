@@ -69,6 +69,9 @@ IMC_CAPABLE_CUTOFF <- config$imc_capable_cutoff
 STUDY_START <- as.POSIXct(config$study_start, tz=site_time_zone) # Start time
 STUDY_END <- as.POSIXct(config$study_end, tz=site_time_zone) # End time
 
+# Device names that are included as NIV
+NIV_NAMES <- config$niv_devices 
+
 rm(config)
 ```
 
@@ -127,9 +130,29 @@ if (length(missing_tables) > 0) {
 # Filter only the filenames that are required
 required_filenames <- clif_table_filenames[clif_table_basenames %in% required_files]
 
+# Define the cast function to convert large_string to string
+cast_large_utf8_to_utf8 <- function(x) {
+  # Only applies to Arrow objects that have a schema()
+  # (open_dataset() returns an Arrow Dataset / query)
+  sch <- arrow::schema(x)
+
+  large_cols <- vapply(
+    sch$fields,
+    function(f) f$type$ToString() %in% c("large_string", "large_utf8"),
+    logical(1)
+  )
+
+  cols_to_cast <- sch$names[large_cols]
+  if (length(cols_to_cast) == 0) return(x)
+
+  x %>% mutate(across(all_of(cols_to_cast), ~ arrow::cast(.x, arrow::utf8())))
+}
+
 # Read the required files into a list of data frames
 if (file_type == "parquet") {
   data_list <- lapply(required_filenames, open_dataset)
+  # Apply cast function to normalize Arrow string types right after import
+  data_list <- lapply(data_list, cast_large_utf8_to_utf8)
 } else if (file_type == "csv") {
   data_list <- lapply(required_filenames, read_csv)
 } else if (file_type == "fst") {
@@ -159,7 +182,6 @@ outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/pro
 
 STABILITY_WINDOW_MINS <- 6 * 60 # Minimum number of minutes of NIV to be included
 MAX_NIV_BREAK_MINS <- 2 * 60 # Maximum amount of minutes allowed off NIV within STABILITY_WINDOW_MINS from starting  
-NIV_NAMES <- c("nippv", "high flow nc") # Device names that are included as NIV
 ED_ALLOWED_LOCATIONS <- c("ed", "procedural", "other") # Lists locations that would be considered still part of ED time
 
 HOSPITAL_BLOCK_TIME_HRS <- 6 # Maximum number of hours allowed between hospitalizations to make them blocked together
