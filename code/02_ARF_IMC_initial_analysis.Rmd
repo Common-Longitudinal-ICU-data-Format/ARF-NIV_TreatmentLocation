@@ -213,6 +213,9 @@ summarize_continuous <- function(data, column_name, nickname = NA, include_title
       !!paste0("n_", nickname)  := sum(!is.na(!!col_symbol)),
       !!paste0("mean_", nickname) := mean(!!col_symbol, na.rm = TRUE),
       !!paste0("sd_", nickname) := sd(!!col_symbol, na.rm = TRUE),
+      !!paste0("median_", nickname) := stats::median(!!col_symbol, na.rm = TRUE),
+      !!paste0("p25_", nickname)    := stats::quantile(!!col_symbol, probs = 0.25, na.rm = TRUE, names = FALSE),
+      !!paste0("p75_", nickname)    := stats::quantile(!!col_symbol, probs = 0.75, na.rm = TRUE, names = FALSE),
       .by = !!by_symbol
     )
   
@@ -250,16 +253,20 @@ summarize_categorical <- function(data, column_name, nickname = NA, include_titl
 
 create_tab_1 <- function(df, include_imc_avail){
   
+  # , continuous_display="mean"
+  # Will save mean (SD) and median (IQR), but display only one
+  
   ### Create HTML table to view ###
   
   # Set the variable to stratify based on
   if (include_imc_avail == 0) {
-    strat_var <- sym("triage_location_formatted")
+    by_column <- "triage_location_formatted"
   } else if (include_imc_avail == 1) {
-    strat_var <- sym("traige_location_imc_avail")
+    by_column <- "traige_location_imc_avail"
   } else {
     stop("Error: include_imc_avail must be 0 or 1")
   }
+  strat_var <- sym(by_column)
 
   triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
 
@@ -271,7 +278,7 @@ create_tab_1 <- function(df, include_imc_avail){
       is_female,
       first_bmi,
       race_summary,
-      elixhauser_total,
+      elixhauser_count,
       ed_hours,
       last_niv_device,
       niv_on_admission,
@@ -284,23 +291,23 @@ create_tab_1 <- function(df, include_imc_avail){
     tbl_summary(
       by = !!strat_var,
       statistic = list(
-        all_continuous() ~ "{mean} ({sd})",
+        all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
         all_categorical() ~ "{n} ({p}%)"
       ),
       label = list(
-        age_at_admission ~ "Age, years, mean (SD)",
+        age_at_admission ~ "Age, years, mean (SD); median (IQR)",
         is_female ~ "Female, n (%)",
-        first_bmi ~ "BMI, mg/kg2, mean (SD)",
+        first_bmi ~ "BMI, mg/kg2, mean (SD); median (IQR)",
         race_summary ~ "Race, n (%)",
-        elixhauser_total ~ "Elixhauser comorbidities, mean (SD)",
-        ed_hours ~ "Time in ED, hours, mean (SD)",
+        elixhauser_count ~ "Elixhauser comorbidity count, mean (SD); median (IQR)",
+        ed_hours ~ "Time in ED, hours, mean (SD); median (IQR)",
         last_niv_device ~ "Type of NIV, n (%)",
         niv_on_admission ~ "Requiring NIV on Admission, n (%)",
         physiologic_type ~ "Physiologic type of ARF, n (%)",
-        sf_value ~ "SF Ratio, mean (SD)",
-        pf_value ~ "PF Ratio, mean (SD)",
-        last_fio2 ~ "FiO2, mean (SD)",
-        worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD)"
+        sf_value ~ "SF Ratio, mean (SD); median (IQR)",
+        pf_value ~ "PF Ratio, mean (SD); median (IQR)",
+        last_fio2 ~ "FiO2, mean (SD); median (IQR)",
+        worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)"
       ),
       missing="ifany"
     ) |>
@@ -345,14 +352,14 @@ create_tab_1 <- function(df, include_imc_avail){
   ### Save as CSVs ###
   
   # Create single table for all variables
-  tab_1_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T),
-                           summarize_continuous(df, "first_bmi", "bmi"),
-                           summarize_continuous(df, "elixhauser_total", "elix"),
-                           summarize_continuous(df, "ed_hours"),
-                           summarize_continuous(df, "sf_value", "sf_value"),
-                           summarize_continuous(df, "pf_value", "pf_value"),
-                           summarize_continuous(df, "last_fio2", "fio2"),
-                           summarize_continuous(df, "worst_non_resp_sofa", "sofa"))
+  tab_1_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T, by_column=by_column),
+                           summarize_continuous(df, "first_bmi", "bmi", by_column=by_column),
+                           summarize_continuous(df, "elixhauser_count", "elix", by_column=by_column),
+                           summarize_continuous(df, "ed_hours", by_column=by_column),
+                           summarize_continuous(df, "sf_value", "sf_value", by_column=by_column),
+                           summarize_continuous(df, "pf_value", "pf_value", by_column=by_column),
+                           summarize_continuous(df, "last_fio2", "fio2", by_column=by_column),
+                           summarize_continuous(df, "worst_non_resp_sofa", "sofa", by_column=by_column))
   
   # Output continuous to csv
   write.csv(tab_1_continuous,
@@ -361,11 +368,11 @@ create_tab_1 <- function(df, include_imc_avail){
             row.names = FALSE)
   
   # Create single table for all variables
-  tab_1_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE),
-                            summarize_categorical(df, "sex_category", nickname = "sex"),
-                            summarize_categorical(df, "last_niv_device", nickname = "last_niv"),
-                            summarize_categorical(df, "niv_on_admission", nickname = "niv_admiss"),
-                            summarize_categorical(df, "physiologic_type", nickname = "physiologic_type"))
+  tab_1_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE, by_column=by_column),
+                            summarize_categorical(df, "sex_category", nickname = "sex", by_column=by_column),
+                            summarize_categorical(df, "last_niv_device", nickname = "last_niv", by_column=by_column),
+                            summarize_categorical(df, "niv_on_admission", nickname = "niv_admiss", by_column=by_column),
+                            summarize_categorical(df, "physiologic_type", nickname = "physiologic_type", by_column=by_column))
   
   
   # Output to csv
@@ -396,12 +403,13 @@ create_tab_2 <- function(df, include_imc_avail){
   
   # Set the variable to stratify based on
   if (include_imc_avail == 0) {
-    strat_var <- sym("triage_location_formatted")
+    by_column <- "triage_location_formatted"
   } else if (include_imc_avail == 1) {
-    strat_var <- sym("traige_location_imc_avail")
+    by_column <- "traige_location_imc_avail"
   } else {
     stop("Error: include_imc_avail must be 0 or 1")
   }
+  strat_var <- sym(by_column)
 
   triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
   
@@ -419,15 +427,15 @@ create_tab_2 <- function(df, include_imc_avail){
     tbl_summary(
       by = !!strat_var,
       statistic = list(
-        all_continuous() ~ "{mean} ({sd})",
+        all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
         all_categorical() ~ "{n} ({p}%)"
       ),
       label = list(
         death_hospice ~ "In-hospital death or discharge to hospice at any time, n (%)",
         death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
         death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
-        los_penalized ~ "Length of stay, days, mean (SD)",
-        days_off ~ "NIV-free days over the first 28 days from starting NIV, days, mean (SD)",
+        los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
+        days_off ~ "NIV-free days over the first 28 days from starting NIV, days, mean (SD); median (IQR)",
         imv ~ "Progression to invasive mechanical ventilation, n (%)",
         was_escalated ~ "Transfer to a higher level of care, n (%)"
         # Add stuff for diagnostic codes and discharge location
@@ -464,8 +472,8 @@ create_tab_2 <- function(df, include_imc_avail){
   ### Save as CSVs ###
   
   # Create single table for all variables
-  tab_2_continuous <- cbind(summarize_continuous(df, "los_penalized", "los", T),
-                         summarize_continuous(df, "days_off", "days_off"))
+  tab_2_continuous <- cbind(summarize_continuous(df, "los_penalized", "los", T, by_column=by_column),
+                         summarize_continuous(df, "days_off", "days_off", by_column=by_column))
   # Output continuous to csv
   write.csv(tab_2_continuous,
             paste0(
@@ -473,11 +481,11 @@ create_tab_2 <- function(df, include_imc_avail){
             row.names = FALSE)
   
   # Create single table for all variables
-  tab_2_catagorical <- cbind(summarize_categorical(df, "death_hospice", nickname = "dh", include_titles = TRUE),
-                          summarize_categorical(df, "death_hospice_28", nickname = "dh_28"),
-                          summarize_categorical(df, "death_hospice_60", nickname = "dh_60"),
-                          summarize_categorical(df, "imv", nickname = "imv"),
-                          summarize_categorical(df, "was_escalated", nickname = "was_escalated"))
+  tab_2_catagorical <- cbind(summarize_categorical(df, "death_hospice", nickname = "dh", include_titles = TRUE, by_column=by_column),
+                          summarize_categorical(df, "death_hospice_28", nickname = "dh_28", by_column=by_column),
+                          summarize_categorical(df, "death_hospice_60", nickname = "dh_60", by_column=by_column),
+                          summarize_categorical(df, "imv", nickname = "imv", by_column=by_column),
+                          summarize_categorical(df, "was_escalated", nickname = "was_escalated", by_column=by_column))
   # Output continuous to csv
   write.csv(tab_2_catagorical,
             paste0(
