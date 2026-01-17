@@ -1,0 +1,1395 @@
+---
+title: "01_ARF_IMC_stratification"
+author: "Sarah Goldfarb"
+date: "2026-01-13"
+output: html_document
+---
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+packages <- c(
+  "tidyverse",
+  "lubridate",
+  "arrow",
+  "yaml",
+  "rprojroot",
+  "data.table",
+  "zoo",
+  "comorbidity",
+  "fst",   
+  "tictoc" 
+)
+
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+
+#Use Dplyr functions as default
+filter <- dplyr::filter
+mutate <- dplyr::mutate
+select <- dplyr::select
+arrange <- dplyr::arrange
+group_by <- dplyr::group_by
+summarise <- dplyr::summarise
+lead <- dplyr::lead
+lag <- dplyr::lag
+coalesce <- dplyr::coalesce
+n <- dplyr::n
+
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+
+# Study start and end
+STUDY_START <- as.POSIXct(config$study_start, tz=site_time_zone) # Start time
+STUDY_END <- as.POSIXct(config$study_end, tz=site_time_zone) # End time
+```
+
+```{r Create folders if needed}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+```
+
+
+```{r Keep track of how long this takes to run}
+tic()
+```
+
+# Load the Required CLIF Tables
+```{r Specify required CLIF tables}
+#List of table names from CLIF 2.0
+tables <- c("patient", "hospitalization", "vitals", "labs", 
+            "medication_admin_continuous", "adt", 
+            "patient_assessments", "respiratory_support", "position", 
+            "dialysis", "intake_output", "ecmo_mcs", "procedures", 
+            "admission_diagnosis", "provider", "sensitivity", 
+            "medication_orders", "medication_admin_intermittent", 
+            "therapy_details", "microbiology_culture", "sensitivity", "microbiology_nonculture", "hospital_diagnosis")
+
+# Tables that should be set to TRUE for this project
+true_tables <- c("patient", "hospitalization", "respiratory_support", "vitals", "labs",
+                 "medication_admin_continuous", "patient_assessments", "adt", "hospital_diagnosis")
+
+# Create a named vector and set the boolean values
+table_flags <- setNames(tables %in% true_tables, tables)
+```
+
+```{r Load relevant CLIF tables, include=FALSE}
+# List all CLIF files in the directory
+clif_table_filenames <- list.files(path = tables_location, 
+                                   pattern = paste0("^clif_.*\\.", file_type, "$"), 
+                                   full.names = TRUE)
+
+# Extract the base names of the files (without extension)
+clif_table_basenames <- basename(clif_table_filenames) |>
+  str_remove(paste0("\\.", file_type, "$"))
+
+# Create a lookup table for required files based on table_flags
+required_files <- paste0("clif_", names(table_flags)[table_flags])
+
+# Check if all required files are present
+missing_tables <- setdiff(required_files, clif_table_basenames)
+if (length(missing_tables) > 0) {
+  stop(paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")))
+}
+
+# Filter only the filenames that are required
+required_filenames <- clif_table_filenames[clif_table_basenames %in% required_files]
+
+# Read the required files into a list of data frames
+if (file_type == "parquet") {
+  data_list <- lapply(required_filenames, open_dataset)
+} else if (file_type == "csv") {
+  data_list <- lapply(required_filenames, read_csv)
+} else if (file_type == "fst") {
+  data_list <- lapply(required_filenames, read.fst)
+} else {
+  stop("Unsupported file format")
+}
+
+# Assign the data frames to variables based on their file names
+for (i in seq_along(required_filenames)) {
+  # Extract the base name of the file (without extension)
+  object_name <- str_remove(basename(required_filenames[i]), paste0("\\.", file_type, "$"))
+  # Make the object name valid for R (replace invalid characters with underscores)
+  object_name <- make.names(object_name)
+  # Assign the tibble to a variable with the name of the file
+  assign(object_name, data_list[[i]])
+}
+```
+
+# Reading in data
+```{r Read in cohort and hospital block information}
+# Cohort information
+final_cohort <- read_csv(paste0(project_location, "/private_tables/all_encounters.csv"), show_col_types=FALSE)
+# Hospital block to hospitalization id key
+hospital_block_key <- read_csv(paste0(project_location, "/private_tables/hospital_block_key.csv"), show_col_types=FALSE)
+# Outlier thresholds
+outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/project_outlier_thresholds.csv"), show_col_types=FALSE)
+```
+
+# Specify global variable names
+```{r Specify global parameters}
+
+NIV_NAMES <- c("nippv", "high flow nc") # Device names that are included as NIV
+NIV_FREE_NAMES <- c("nasal cannula", "room air") # Device names that would be considered "off NIV"; "face mask" removed
+
+DEATH_PENALTY <- 0.99 # Sets the percentile that death and hospice is penalized to
+
+# Cutoffs for physiologic types of ARF
+PH_CUTOFF <- 7.30 # Cutoff for primary hypercapnic
+PCO2_CUTOFF <- 50 # PCO2 cutoff for primary hypercapnic
+SF_RATIO_CUTOFF <- 315 # SF ratio for pure hypoxemic
+SPO2_MAX <- 97 # SpO2 max cutoff to use SF ratio
+SPO2_MIN <- 70 # SpO2 min cutoff to use SF ratio
+PF_RATIO_CUTOFF <- 300 # PF ratio for pure hypoxemic
+
+ASSUME_NA_SOFA_SUBSCORE_0 <- TRUE # Set whether an NA subscore for SOFA can be assumed to be 0
+
+PRESSOR_LIST <- c("norepinephrine", "epinephrine","phenylephrine", "vasopressin","dopamine", "angiotensin") # List of pressors used for SOFA
+
+DAYS_OFF_CUTOFF <- 28 # Set the number of days to look at after starting NIV to see how many of those days are off NIV or worse
+```
+
+# Create hospital blocks for all relevant CLIF tables
+```{r Add hospital blocks to all relevant CLIF tables}
+
+hospital_block_key_obj <- 
+  arrow::arrow_table(
+  hospital_block_key |>
+    select(patient_id,
+           hospitalization_id,
+           hospital_block_id,
+           block_start_admit,
+           block_end_discharge,
+           discharge_location) |>
+  # ensure same datatype
+  mutate(patient_id = as.character(patient_id),
+      hospitalization_id = as.character(hospitalization_id)))
+
+clif_hospitalization <- clif_hospitalization |>
+  # ensure same datatype
+  mutate(patient_id = as.character(patient_id),
+      hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id", "patient_id")) |>
+  compute()
+
+clif_respiratory_support <- clif_respiratory_support |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_vitals <- clif_vitals |>
+  filter(vital_category %in% c("map", "spo2", "weight_kg", "height_cm")) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_labs <- clif_labs |>
+  filter(lab_category %in% c("so2_arterial", "so2_mixed_venous", "so2_central_venous",
+                             "ph_arterial", "ph_venous", 
+                             "pco2_arterial", "pco2_venous", "po2_arterial",
+                             "platelet_count", "bilirubin_total", "creatinine")) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+
+clif_patient_assessments <- clif_patient_assessments |>
+  filter(assessment_category == "gcs_total")|>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_medication_admin_continuous <- clif_medication_admin_continuous |>
+  filter(med_category %in% PRESSOR_LIST) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_adt <- clif_adt |>
+  select(hospitalization_id, hospital_id, hospital_type, in_dttm, out_dttm, location_name, location_category, location_type) |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_hospital_diagnosis <- clif_hospital_diagnosis |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+
+```
+
+# Merge with patient information
+```{r Merge with patient information}
+final_cohort <- arrow::arrow_table(final_cohort) |>
+  # Ensure same data type
+  mutate(patient_id = as.character(patient_id)) |>
+  # Load in all patient information
+  inner_join(
+    clif_patient |> select(patient_id, race_category, ethnicity_category, sex_category),
+    by = "patient_id"
+  ) |>
+  collect()
+```
+
+# Add patient's weight and height
+```{r Merge with patient weight and height}
+# Add patient weights (take first weight during hospital block)
+patient_weights <- arrow::arrow_table(final_cohort) |>
+  # Only need hospital block for identifying weights
+  select(hospital_block_id) |>
+  # Load in all patient information
+  inner_join(
+    clif_vitals |> 
+      # Select only weights
+      filter(vital_category == "weight_kg")|>
+      select(hospital_block_id, initial_weight_dttm = recorded_dttm, initial_weight_kg=vital_value),
+    by = "hospital_block_id"
+  ) |>
+  collect() |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(initial_weight_kg >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "weight_kg"] 
+         & initial_weight_kg <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "weight_kg"]) |>
+  group_by(hospital_block_id) |>
+  # Select the row with the earliest timestamp
+  slice_min(order_by = initial_weight_dttm, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+# Add patient heights (take first height during hospital block, which can be at any time, as it should not change)
+patient_heights <- arrow::arrow_table(final_cohort) |>
+  # Only need hospital block for identifying weights
+  select(hospital_block_id) |>
+  # Load in all patient information
+  inner_join(
+    clif_vitals |> 
+      # Select only weights
+      filter(vital_category == "height_cm")|>
+      select(hospital_block_id, initial_height_dttm = recorded_dttm, initial_height_cm=vital_value),
+    by = "hospital_block_id"
+  ) |>
+  collect() |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(initial_height_cm >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "height_cm"] 
+         & initial_height_cm <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "height_cm"]) |>
+  group_by(hospital_block_id) |>
+  # Select the row with the earliest timestamp
+  slice_min(order_by = initial_height_dttm, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+
+# Join with cohort information
+final_cohort <- final_cohort |>
+  # Add patient weights and heights to current cohort information
+  left_join(patient_weights,
+            by = "hospital_block_id")|>
+  left_join(patient_heights,
+            by = "hospital_block_id") |>
+  # Calculate BMI
+  mutate(first_bmi = initial_weight_kg/((initial_height_cm/100)**2))
+
+# Clean space
+rm(patient_weights, patient_heights)
+```
+
+# Calculating Elixhauser Comorbidity Scores
+```{r Calculating Elixhauser Comorbidity Scores}
+
+# Calculating Elixhauser Comorbidity Scores
+get_elixhauser_flags <- function(df, icd_version=10){
+  
+  # Set the expression to search for correct diagnosis code format
+  expression <- regex(paste0("icd.*", icd_version,".*"), ignore_case = TRUE)
+  
+  # Identify rows in diagnoses that use the desired format
+  df <- df |>
+    # move collect earlier 
+    collect() |> 
+    # Only include diagnoses present on admission
+    filter(poa_present==1, 
+           # Select only rows using correct diagnosis code format
+           str_detect(diagnosis_code_format, expression)) |>
+    select(hospital_block_id, diagnosis_code)
+  
+  # If there are no rows of this type, return nothing
+  if(nrow(df)==0){
+    return(NULL)
+  }
+  # Return list of hospital blocks and whether each elixhauser comorbidity was present or not on admission (1 or 0)
+  return(comorbidity(x = df,
+                     id = "hospital_block_id",
+                     code = "diagnosis_code",
+                     map = paste0("elixhauser_icd", icd_version,"_quan"),
+                     assign0 = FALSE))
+}
+
+# Determine elixhauser flags, bring together flags using ICD 9 and 10 codes
+elixhauser_scores <- rbind(get_elixhauser_flags(clif_hospital_diagnosis, 9), get_elixhauser_flags(clif_hospital_diagnosis, 10)) |>
+  # Group by hospital block and condense to one row per block (if flag is = 1 for either, set as 1; otherwise 0)
+  group_by(hospital_block_id) |>
+  summarize(across(everything(), ~as.integer(any(. ==1))), .groups="drop") |>
+  ungroup() |>
+  # Calculate the overall score, using van Walraven et al. (2009) weights
+  mutate(elixhauser_total = 
+           chf * 7 + # Congestive heart failure
+           carit * 5 + # Cardiac arrhythmia
+           valv * -1 + # Valvular disease
+           pcd * 4 + # Pulmonary circulation disorders
+           pvd * 2 + # Peripheral vascular disease
+           min(hypunc+hypc, 1) * 0 + # All forms of HTN
+           para * 7 + # Paralysis
+           ond * 6 + # Other neurological disorders
+           cpd * 3 + # Chronic pulmonary disease
+           diabunc * 0 + # Uncomplicated diabetes
+           diabc * 0 + # Complicated diabetes
+           hypothy * 0 + # Hypothyroidism
+           rf * 5 + # Renal failure
+           ld * 11 + # Liver disease
+           pud * 0 + # Peptic ulcer disease
+           aids * 0 + # HIV/AIDS
+           lymph * 9 + # Lymphoma
+           metacanc * 12+ # Metastatic cancer
+           solidtum * 4 + # Solid tumor
+           rheumd * 0 + # Rheumatoid arthritis/collagen vascular disease
+           coag * 3 + # Coagulopathy
+           obes * -4 + # Obesity
+           wloss * 6+ # Weight loss
+           fed * 5 + # Fluid and electrolyte disorders
+           blane * -2 + # Blood loss anemia
+           dane * -2 + # Deficiency anemia
+           alcohol * 0 + # Alcohol abuse
+           drug * -7 + # Drug abuse
+           psycho * 0 + # Psychosis
+           depre * -3 # Depression
+           )
+
+# Join with current cohort information
+final_cohort <- final_cohort |>
+  left_join(elixhauser_scores |> 
+              select(hospital_block_id, elixhauser_total),
+            by = "hospital_block_id") |>
+  # For those with no comorbidities (score would be NA), fill in with default score of 0
+  mutate(elixhauser_total = replace_na(elixhauser_total, 0))
+```
+
+# Determining who is on NIV on admission (when leaving the ED)
+```{r Determining who is on NIV on admission}
+# Identify last resp device in the ED
+last_resp_device <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stop_ed) |>
+  left_join(clif_respiratory_support |>
+              # Select only device name and the time
+              select(hospital_block_id, recorded_dttm, device_category),
+            by = "hospital_block_id") |>
+  # Select only respiratory devices within the time of the ED
+  filter(recorded_dttm >= start_ed,
+         recorded_dttm <= stop_ed) |>
+  collect() |>
+  # Group by hospital block, ordering by time
+  arrange(hospital_block_id, recorded_dttm) |>
+  group_by(hospital_block_id) |>
+  # Only select rows where device category is stated
+  filter(!is.na(device_category)) |>
+  # Select the last (most recent) device used in ED
+  slice_max(order_by = recorded_dttm, n=1, with_ties = F) |>
+  mutate(niv_on_admission = ifelse(tolower(device_category) %in% NIV_NAMES, 1, 0)) |>
+  # Select only relevant columns and rename
+  select(hospital_block_id, niv_on_admission, last_ed_device = device_category)
+
+final_cohort <- final_cohort |>
+  left_join(last_resp_device, by="hospital_block_id")
+```
+
+# Determining physiologic phenotype of ARF
+## Hypercapnics
+```{r Identify hypercapnics}
+
+# Identify all patients who would be considered hypercapnic
+# Based on ED arrival to end of stability window
+hypercapnics <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stability_window_end) |>
+  left_join(clif_labs |>
+              # Select only labs relevant for hypercapnic ARF
+              filter(lab_category %in% c("ph_arterial", "ph_venous",
+                                         "pco2_arterial", "pco2_venous")) |>
+              # Select only relevant variables
+              select(hospital_block_id, dttm=lab_collect_dttm, lab_category, 
+                     value=lab_value_numeric),
+           by = "hospital_block_id")|>
+  # Select only labs from when patient arrived in ED until end of stability window
+  filter(
+    dttm >= start_ed,
+    dttm <= stability_window_end
+  ) |>
+  # Load in data
+  collect() |>
+  # Join with outlier thresholds to get the limits for each lab category
+  left_join(outlier_thresholds, by = c("lab_category" = "variable_name")) |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(value >= lower_limit & value <= upper_limit) |>
+  # Clean up by removing the threshold columns
+  select(-lower_limit, -upper_limit) |>
+  mutate(
+    # Create a column that classifies types of lab group (e.g., venous pH and arterial pH are both pH)
+    lab_type = case_when(
+      grepl("ph", lab_category) ~ "ph",
+      grepl("pco2", lab_category) ~ "pco2",
+      TRUE ~ NA_character_
+    ),
+    # Create a column that classifies where the lab was drawn from (e.g., arterial vs venous)
+    av = case_when(
+      grepl("arterial", lab_category) ~ "arterial",
+      grepl("venous", lab_category) ~ "venous",
+      TRUE ~ NA_character_
+    ),
+    # Indicate whether higher or lower value is worse
+    direction_worse = case_when(
+      lab_type == "ph"   ~ "low",
+      lab_type == "pco2" ~ "high",
+      TRUE ~ NA_character_
+    )
+  )|>
+  # Drop unnecessary column
+  select(-lab_category) |>
+  # Group by each patient and which lab they got, selecting the worst of each
+  group_by(hospital_block_id, lab_type) |>
+  # Select the worst row for each lab_type
+  slice_max(
+    order_by = ifelse(direction_worse == "high", value, -value),
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  # Drop unnecessary columns
+  select(-c(direction_worse)) |>
+  # Set only one row per hospitalization block
+  pivot_wider(
+    id_cols = c(hospital_block_id),
+    names_from = lab_type,
+    values_from = c(dttm, value, av),
+    names_glue = "{lab_type}_{.value}"
+  ) |>
+  mutate(is_hypercapnic = ifelse(ph_value < PH_CUTOFF & pco2_value > PCO2_CUTOFF, 1, 
+                                 ifelse(ph_value >= PH_CUTOFF | pco2_value <= PCO2_CUTOFF, 0, NA_integer_)))
+
+# Rejoin final cohort with hypercapnic data
+final_cohort <- final_cohort |>
+  left_join(
+    hypercapnics, 
+    by = c("hospital_block_id")
+  )
+
+# Clear space
+rm(hypercapnics)
+```
+
+## Hypoxics
+```{r Identify hypoxics}
+# Identify all valid fio2 values
+fio2_values <- clif_respiratory_support |>
+  # Select only rows that have hospitalization block id within final cohort
+  inner_join(
+    final_cohort |> 
+      select(hospital_block_id),
+    by = "hospital_block_id"
+  ) |>
+  collect() |>
+  # Filter to keep only values within the thresholds (inclusive)
+  # Keep NAs too, as those may indicate switch in device
+  filter(is.na(fio2_set) | 
+    (fio2_set >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "fio2_set"] 
+         & fio2_set <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "fio2_set"])) 
+
+# Identify most recent fio2 in study window
+most_recent_fio2 <- final_cohort |>
+  select(hospital_block_id, start_ed, stability_window_end) |>
+  left_join(fio2_values |>
+              # Set fio2 as 0 if patient is on room air
+              mutate(fio2_set = ifelse(tolower(device_category) == "room air", 1, fio2_set)) |>
+              # Remove NA
+              filter(!is.na(fio2_set)) |>
+              # Select only columns needed
+              select(hospital_block_id, recorded_dttm, fio2_set),
+            by = "hospital_block_id"
+  )|> 
+  # Order by time
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Group by given hospitalization
+  group_by(hospital_block_id) |>
+  # Filter to only those within the stability period
+  filter(recorded_dttm >= start_ed,
+         recorded_dttm <= stability_window_end) |>
+  # Take the last (most recent) fio2 in stability window
+  slice_max(order_by = recorded_dttm, n=1, with_ties = F) |>
+  # Select only relevant columns and rename
+  select(hospital_block_id, last_fio2=fio2_set)
+
+# Join cohort with fio2 values
+final_cohort <- final_cohort |>
+  left_join(
+    most_recent_fio2, 
+    by = c("hospital_block_id")
+  )
+
+# Clear space
+rm(most_recent_fio2)
+
+# Return to fio2 values to create ongoing fio2
+fio2_values <- fio2_values |>
+  # Order by time
+  arrange(hospital_block_id, device_category, recorded_dttm) |>
+  # Group by given hospitalization and within a device category (e.g., no carrying through if NC to BiPAP)
+  group_by(hospital_block_id, device_category) |>
+  # Carry forward FiO2 within same device (fill NAs with prior value)
+  mutate(fio2_set = zoo::na.locf(fio2_set, na.rm = FALSE)) |>
+  # Carry backward if first entries missing FiO2 (fill NAs with next value)
+  mutate(fio2_set = zoo::na.locf(fio2_set, fromLast = TRUE, na.rm = FALSE)) |>
+  ungroup() |>
+  # Selecting only relevant columns
+  select(hospital_block_id, recorded_dttm, device_category, fio2_set)
+
+# Convert to data.table
+setDT(fio2_values)
+
+# Calculate SF ratios
+spo2_values <- clif_vitals |>
+  # Select only rows that have hospitalization block id within final cohort
+  inner_join(
+    final_cohort |> 
+      select(hospital_block_id, start_ed, stability_window_end),
+    by = "hospital_block_id"
+  ) |>
+  filter(
+    # Only look at SpO2
+    vital_category == "spo2",
+    # Only keep SpO2 <= SPO2_MAX and > SPO2_MIN
+    vital_value <= SPO2_MAX & vital_value > SPO2_MIN,
+    # Only keep SpO2 measurements from arrival until end of stability window
+    recorded_dttm >= start_ed,
+    recorded_dttm <= stability_window_end
+    ) |>
+  # Select only relevant columns
+  select(hospital_block_id, recorded_dttm, spo2 = vital_value) |>
+  collect() |>
+  # Filter to keep only values within the thresholds (inclusive)
+  # Should be redundant because MAX and MIN are set above for specific calculation requirements
+  filter(spo2 >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "spo2"] 
+         & spo2 <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "spo2"])
+
+# Convert to data.table
+setDT(spo2_values)
+
+# Assign the most recent device at or before each SpO2 time
+spo2_values <- fio2_values[spo2_values, 
+                           on = .(hospital_block_id, recorded_dttm),
+                           roll = Inf,
+                           .(hospital_block_id, recorded_dttm = i.recorded_dttm, spo2, device_category)]
+
+
+# Match each SpO2 to most recent FiO2 (within the same hospital block and device)
+sf_ratios <- fio2_values[spo2_values, 
+                         on = .(hospital_block_id, device_category, recorded_dttm),
+                         roll = Inf]
+# Calculate the SF ratio
+sf_ratios[, sf_ratio := spo2 / fio2_set]
+
+# Identify and select only the worst SF ratio
+sf_ratios <- sf_ratios |>
+  # Remove rows without SF ratios
+  filter(!is.na(sf_ratio)) |>
+  # Group by each hospital block
+  group_by(hospital_block_id) |>
+  # Select the worst SF ratio
+  slice_min(
+    order_by = sf_ratio,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()
+
+# Rejoin final cohort with SF ratios
+final_cohort <- final_cohort |>
+  left_join(
+    sf_ratios |> select(hospital_block_id, 
+                        sf_dttm = recorded_dttm, 
+                        sf_device_category = device_category,
+                        sf_value = sf_ratio), 
+    by = c("hospital_block_id")
+  )
+
+# Clear space
+rm(sf_ratios, spo2_values)
+
+# Calculate PF ratios
+pao2_values <- clif_labs |>
+  # Select only rows that have hospitalization block id within final cohort
+  inner_join(
+    final_cohort |> 
+      select(hospital_block_id, start_ed, stability_window_end),
+    by = "hospital_block_id"
+  ) |>
+  filter(
+    # Only look at PaO2
+    lab_category == "po2_arterial",
+    # Only select for measurements in valid time range
+    lab_collect_dttm >= start_ed,
+    lab_collect_dttm <= stability_window_end
+    ) |>
+  # Select only relevant columns, rename value column to spo2
+  select(hospital_block_id, lab_collect_dttm, pao2 = lab_value_numeric) |>
+  # Convert lab values to numeric
+  mutate(pao2 = as.numeric(pao2)) |>
+  # Remove null values
+  filter(!is.na(pao2)) |>
+  collect()|>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(pao2 >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "pao2"] 
+         & pao2 <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "pao2"])
+
+# Convert to data.table
+setDT(pao2_values)
+
+# Assign the most recent device at or before each SpO2 time
+pao2_values <- fio2_values[pao2_values, 
+                           on = .(hospital_block_id, recorded_dttm=lab_collect_dttm),
+                           roll = Inf,
+                           .(hospital_block_id, recorded_dttm = lab_collect_dttm, 
+                             pao2, device_category)]
+
+
+# Match each PaO2 to most recent FiO2 (within the same hospital block and device)
+pf_ratios <- fio2_values[pao2_values, 
+                         on = .(hospital_block_id, device_category, recorded_dttm),
+                         roll = Inf]
+
+# Calculate the PF ratio
+pf_ratios[, pf_ratio := pao2 / fio2_set]
+
+# Identify and select only the worst PF ratio
+pf_ratios <- pf_ratios |>
+  # Remove rows without SF ratios
+  filter(!is.na(pf_ratio)) |>
+  # Group by each hospital block
+  group_by(hospital_block_id) |>
+  # Select the worst SF ratio
+  slice_min(
+    order_by = pf_ratio,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()
+
+# Rejoin final cohort with PF ratios
+final_cohort <- final_cohort |>
+  left_join(
+    pf_ratios |> select(hospital_block_id, 
+                        pf_dttm = recorded_dttm, 
+                        pf_device_category = device_category,
+                        pf_value = pf_ratio), 
+    by = c("hospital_block_id")
+  )
+
+# Clean space
+rm(fio2_values, pao2_values, pf_ratios)
+```
+
+## Categorize physiologic categories
+```{r Categorize physiologic categories}
+
+final_cohort <- final_cohort |>
+  mutate(
+    # Define patients as hypoxic if meeting hypoxic criteria
+    # Set up without ifelse and | to avoid issues with NA values for SF and PF
+    is_hypoxic = case_when(
+      sf_value <= SF_RATIO_CUTOFF ~ 1,
+      pf_value <= PF_RATIO_CUTOFF ~ 1,
+      sf_value >= SF_RATIO_CUTOFF ~ 0,
+      pf_value >= PF_RATIO_CUTOFF ~ 0,
+      TRUE ~ NA_integer_
+    ),
+    # Define patients as "Undefined" if they are missing hypoxic or hypercapnic
+    is_undefined = ifelse(is.na(is_hypercapnic) | is.na(is_hypoxic), 1, 0),
+    # Define patients who are "Mixed" meaning they meet criteria for both hyopxia and hypercapnia
+    is_mixed = ifelse(is_undefined, NA_integer_, ifelse(is_hypercapnic & is_hypoxic, 1, 0)),
+    # Define patients who are proven neither nor hyopxia and hypercapnia
+    is_neither = ifelse(is_undefined, NA_integer_, ifelse(!is_hypercapnic & !is_hypoxic, 1, 0))
+  )
+
+# Generally categorizing phenotype, these will add to 100%
+# Assumes if a patient is hypoxic and has no hypercapnia data, only hypoxic (and vice versa)
+final_cohort <- final_cohort |>
+  mutate(physiologic_type = factor(case_when(
+    is_hypoxic == 1 & is_hypercapnic == 1 ~ "Mixed",
+    is_hypoxic == 1 ~ "Hypoxic",
+    is_hypercapnic == 1 ~ "Hypercapnic",
+    is_hypoxic == 0 & is_hypercapnic == 0 ~ "Neither",
+    TRUE ~ "Undefined"
+  ),levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")))
+```
+
+# Determining severity using non-respiratory SOFA
+
+## Lab-derived SOFA subscores
+```{r Lab-derived SOFA subscores}
+# Non-respiratory SOFA (max 20)
+# Platelets (lab): >=150=0; 100–149=1; 50–99=2; 20–49=3; <20=4
+# tBili (lab): <1.2=0; 1.2–1.9=1; 2.0–5.9=2; 6.0–11.9=3; >=12=4
+# Cardiovascular (vitals, meds continuous): MAP>=70 and no pressors=0; MAP<70 adn no pressors=1; scores 2-4 based on pressor use
+# GCS (patient assessments): 15=0; 13–14=1; 10–12=2; 6–9=3; <6=4
+# Renal (lab): Cr<1.2=0; 1.2–1.9=1; 2.0–3.4=2; 3.5–4.9 or UOP<500=3; Cr>=5.0 or UOP<200=4 (note: we do not have UOP)
+
+# Identify the worst SOFA subscores for lab-derived scores
+worst_sofa_lab_subscores <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stability_window_end) |>
+  left_join(clif_labs |>
+              # Select only labs relevant for SOFA
+              filter(lab_category %in% c("platelet_count", "bilirubin_total",
+                                         "creatinine")) |>
+              # Select only relevant variables
+              select(hospital_block_id, dttm=lab_collect_dttm, lab_category, 
+                     value=lab_value_numeric),
+           by = "hospital_block_id")|>
+  # Select only labs from when patient arrived in ED until end of stability window
+  filter(
+    dttm >= start_ed,
+    dttm <= stability_window_end
+  ) |>
+  # Load in data
+  collect() |>
+  # Select only rows with valid (existing and numeric) values
+  filter(!is.na(value) & !is.nan(value)) |>
+  # Join with outlier thresholds to get the limits for each lab category
+  left_join(outlier_thresholds, by = c("lab_category" = "variable_name")) |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(value >= lower_limit & value <= upper_limit) |>
+  # Clean up by removing the threshold columns
+  select(-lower_limit, -upper_limit) |>
+  mutate(
+    # Create a column that classifies types of lab group (e.g., platelets vs Cr)
+    lab_type = case_when(
+      grepl("platelet_count", lab_category) ~ "plt",
+      grepl("bilirubin_total", lab_category) ~ "tbili",
+      grepl("creatinine", lab_category) ~ "cr",
+      TRUE ~ NA_character_
+    ),
+    # Indicate whether higher or lower value is worse
+    direction_worse = case_when(
+      lab_type == "plt"   ~ "low",
+      lab_type == "tbili" ~ "high",
+      lab_type == "cr" ~ "high",
+      TRUE ~ NA_character_
+    )
+  )|>
+  # Drop unnecessary column
+  select(-lab_category) |>
+  # Group by each patient and which lab they got, selecting the worst of each
+  group_by(hospital_block_id, lab_type) |>
+  # Select the worst row for each lab_type
+  slice_max(
+    order_by = ifelse(direction_worse == "high", value, -value),
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  # Drop unnecessary columns
+  select(-c(direction_worse)) |>
+  # Set only one row per hospitalization block
+  pivot_wider(
+    id_cols = c(hospital_block_id),
+    names_from = lab_type,
+    values_from = c(dttm, value),
+    names_glue = "{lab_type}_{.value}"
+  ) |>
+  # Assign SOFA subscores
+  mutate(
+    worst_plt_subscore = ifelse(
+      plt_value >= 150, 0, ifelse(
+        plt_value >=100, 1, ifelse(
+          plt_value >=50, 2, ifelse(
+            plt_value >=20, 3, ifelse(
+              plt_value < 20, 4, NA
+            )
+          )
+        )
+      )
+    ),
+    worst_tbili_subscore = ifelse(
+      tbili_value <1.2, 0, ifelse(
+        tbili_value <2.0, 1, ifelse(
+          tbili_value <6, 2, ifelse(
+            tbili_value <12, 3, ifelse(
+              tbili_value >=12, 4, NA
+            )
+          )
+        )
+      )
+    ),
+    worst_cr_subscore = ifelse(
+      cr_value <1.2, 0, ifelse(
+        cr_value <2, 1, ifelse(
+          cr_value <3.5, 2, ifelse(
+            cr_value <5, 3, ifelse(
+              cr_value >=5, 4, NA
+            )
+          )
+        )
+      )
+    )
+  )
+```
+
+## Cardiovascular SOFA subscore
+```{r Cardiovascular SOFA subscore}
+# Identify the worst cardiovascular SOFA subscore (calculate MAP subscore and pressor subscore, then take worst)
+# Cardiovascular (vitals, meds continuous): MAP>=70=0; MAP<70=1; Dopa<=5 or dobut=2; Dopa>5 or NE/Epi<=0.1=3; Dopa>15 or NE/Epi>0.1=4
+map_subscore <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stability_window_end) |>
+  left_join(clif_vitals |>
+              # Select only MAP
+              filter(vital_category %in% "map") |>
+              # Select only relevant variables
+              select(hospital_block_id, map_dttm=recorded_dttm, 
+                     map_value=vital_value),
+           by = "hospital_block_id")|>
+  # Select only vitals from when patient arrived in ED until end of stability window
+  filter(
+    map_dttm >= start_ed,
+    map_dttm <= stability_window_end
+  ) |>
+  # Load in data
+  collect() |>
+  # Select only rows with valid (existing and numeric) values
+  filter(!is.na(map_value) & !is.nan(map_value)) |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(map_value >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "map"] 
+         & map_value <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "map"]) |>
+  # Group by each patient, selecting the worst of each
+  group_by(hospital_block_id) |>
+  # Select the worst row for each 
+  slice_min(
+    order_by = map_value,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()|>
+  # Assign SOFA subscores (MAP only)
+  mutate(worst_map_subscore = 
+           ifelse(map_value >= 70, 0, 
+                  ifelse(map_value < 70, 1, NA)))
+
+# Now calculate based on pressors
+pressor_subscore <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stability_window_end, initial_weight_kg) |>
+  left_join(clif_medication_admin_continuous |>
+              # Select only relevant pressors
+              filter(med_category %in% c("dopamine", "dobutamine",
+                                         "epinephrine", "norepinephrine")) |>
+              # Select only relevant variables
+              select(hospital_block_id, dttm=admin_dttm, 
+                     med_category, dose=med_dose, dose_unit=med_dose_unit, mar_action_name),
+           by = "hospital_block_id")|>
+  # Select only meds from when patient arrived in ED until end of stability window
+  filter(
+    dttm >= start_ed,
+    dttm <= stability_window_end,
+    # Only keep new instances/changes in dose
+    tolower(mar_action_name) != "stopped"
+  ) |>
+  # Load in data
+  collect() |>
+  # Select only rows with valid (existing and numeric) values
+  filter(!is.na(dose) & !is.nan(dose)) |>
+  # Convert units to mcg/kg/min for all pressors
+  mutate(
+    dose_unit = tolower(dose_unit),
+    # Convert dose to consistent units (mcg/kg/min)
+    dose_mcg_kg_min = case_when(
+      # Already weight-based units
+      dose_unit == "mcg/kg/min" ~ dose,
+      dose_unit == "mg/kg/min" ~ dose * 1000,
+      dose_unit == "ng/kg/min" ~ dose / 1000,
+      # Total dose units - need weight conversion
+      dose_unit == "mcg/min" & !is.na(initial_weight_kg) ~ dose / initial_weight_kg,
+      dose_unit == "mg/min" & !is.na(initial_weight_kg) ~ (dose * 1000) / initial_weight_kg,
+      dose_unit == "ng/min" & !is.na(initial_weight_kg) ~ (dose / 1000) / initial_weight_kg,
+      # If weight is missing for total dose units, exclude these records
+      dose_unit %in% c("mcg/min", "mg/min", "ng/min") & is.na(initial_weight_kg) ~ NA_real_,
+      TRUE ~ dose # Keep original if unit conversion not clear
+    )
+  ) |>
+  # Remove records where dose conversion failed due to missing weight
+  filter(!is.na(dose_mcg_kg_min)) |>
+  # Create binary indicators for each pressor being on
+  group_by(hospital_block_id, dttm) |>
+  summarise(
+    dopa_dose = max(ifelse(tolower(med_category) == "dopamine", dose_mcg_kg_min, 0), na.rm = TRUE),
+    epi_dose = max(ifelse(tolower(med_category) == "epinephrine", dose_mcg_kg_min, 0), na.rm = TRUE),
+    norepi_dose = max(ifelse(tolower(med_category) == "norepinephrine", dose_mcg_kg_min, 0), na.rm = TRUE),
+    dobut_dose = max(ifelse(tolower(med_category) == "dobutamine", dose_mcg_kg_min, 0), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  # Calculate pressor_on indicator
+  mutate(pressor_on = ifelse(dopa_dose > 0 | epi_dose > 0 | norepi_dose > 0 | dobut_dose > 0, 1, 0)) |>
+  # Apply the SOFA pressor scoring criteria
+  mutate(
+    worst_pressor_subscore = case_when(
+      dopa_dose > 15 | epi_dose > 0.1 | norepi_dose > 0.1 ~ 4,
+      dopa_dose > 5 | (epi_dose > 0 & epi_dose <= 0.1) | (norepi_dose > 0 & norepi_dose <= 0.1) ~ 3,
+      (dopa_dose > 0 & dopa_dose <= 5) | dobut_dose > 0 ~ 2,
+      pressor_on == 0 ~ 0,
+      TRUE ~ 0
+    )
+  ) |>
+  # Group by patient and hospital block ID to get worst score
+  group_by(hospital_block_id) |>
+  # Select worst subscore for each patient
+  slice_max(worst_pressor_subscore, n=1, with_ties=FALSE) |>
+  ungroup()
+
+
+# Bring MAP and pressor scores to make one cardiovascular SOFA subscore
+worst_sofa_cardiovascular_subscores <- map_subscore |>
+  select(hospital_block_id, map_dttm, map_value, worst_map_subscore) |>
+  full_join(pressor_subscore |>
+              select(hospital_block_id,pressor_dttm = dttm, worst_pressor_subscore), 
+            by = c("hospital_block_id")) |>
+  mutate(worst_cv_subscore = pmax(worst_map_subscore, worst_pressor_subscore, na.rm = TRUE)) 
+
+# Clean space
+rm(map_subscore, pressor_subscore)
+```
+
+## GCS SOFA subscore
+```{r GCS SOFA subscore}
+# Identify the worst SOFA subscore for GCS
+worst_sofa_gcs_subscores <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stability_window_end) |>
+  left_join(clif_patient_assessments |>
+              # Select only GCS
+              filter(assessment_category %in% "gcs_total") |>
+              # Select only relevant variables
+              select(hospital_block_id, gcs_dttm=recorded_dttm, 
+                     gcs_value=numerical_value),
+           by = "hospital_block_id")|>
+  # Select only assessments from when patient arrived in ED until end of stability window
+  filter(
+    gcs_dttm >= start_ed,
+    gcs_dttm <= stability_window_end
+  ) |>
+  # Load in data
+  collect() |>
+  # Select only rows with valid (existing and numeric) values
+  filter(!is.na(gcs_value) & !is.nan(gcs_value)) |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(gcs_value >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "gcs_total"] 
+         & gcs_value <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "gcs_total"]) |>
+  # Group by each patient, selecting the worst of each
+  group_by(hospital_block_id) |>
+  # Select the worst row for each 
+  slice_min(
+    order_by = gcs_value,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup()|>
+  # Assign SOFA subscores
+  mutate(
+    worst_gcs_subscore = ifelse(gcs_value == 15, 0, ifelse(
+      gcs_value == 13 | gcs_value == 14, 1, ifelse(
+        gcs_value >= 10 & gcs_value <= 12, 2, ifelse(
+          gcs_value >= 6 & gcs_value <= 9, 3, ifelse(
+            gcs_value < 6, 4, NA))))))
+
+```
+
+## Overall SOFA score
+```{r Overall SOFA score}
+# Calculate the worst SOFA scores
+all_sofa_scores <- worst_sofa_lab_subscores |>
+  full_join(worst_sofa_cardiovascular_subscores,
+            by = c("hospital_block_id")) |>
+  full_join(worst_sofa_gcs_subscores |> select(-c(stability_window_end, start_ed)) ,
+            by = c("hospital_block_id")) |>
+  # Assume GCS 15 if not stated
+  mutate(worst_gcs_subscore = coalesce(worst_gcs_subscore, 0)) |>
+  # Calculate total non-respiratory SOFA
+  mutate(worst_non_resp_sofa = rowSums(across(c(
+    worst_plt_subscore, 
+    worst_tbili_subscore,
+    worst_cv_subscore,
+    worst_gcs_subscore,
+    worst_cr_subscore)),
+    na.rm = ASSUME_NA_SOFA_SUBSCORE_0
+  )
+)
+
+# Clean space
+rm(worst_sofa_lab_subscores, worst_sofa_cardiovascular_subscores, worst_sofa_gcs_subscores)
+
+# Merge back with final cohort
+final_cohort <- final_cohort |>
+  left_join(all_sofa_scores |>
+              select(hospital_block_id,
+                     worst_plt_subscore, worst_tbili_subscore,
+                     worst_cv_subscore, worst_gcs_subscore,
+                     worst_cr_subscore, worst_non_resp_sofa),
+            by = c("hospital_block_id"))
+
+# Set the overall SOFA to 0 if there are no subscores at all, if set to do so above
+if(ASSUME_NA_SOFA_SUBSCORE_0){
+  final_cohort <- final_cohort |>
+    mutate(worst_non_resp_sofa = coalesce(worst_non_resp_sofa, 0))
+}
+
+```
+
+# Determining last GCS score
+```{r Last GCS in ED}
+# Identify the last GCS in ED
+last_gcs_tbl <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stop_ed) |>
+  left_join(clif_patient_assessments |>
+              # Select only GCS
+              filter(assessment_category %in% "gcs_total") |>
+              # Select only relevant variables
+              select(hospital_block_id, gcs_dttm=recorded_dttm, 
+                     last_gcs=numerical_value),
+           by = "hospital_block_id")|>
+  # Select only assessments from when patient arrived in ED until end of stability window
+  filter(
+    gcs_dttm >= start_ed,
+    gcs_dttm <= stop_ed
+  ) |>
+  # Load in data
+  collect() |>
+  # Select only rows with valid (existing and numeric) values
+  filter(!is.na(last_gcs) & !is.nan(last_gcs)) |>
+  # Filter to keep only values within the thresholds (inclusive)
+  filter(last_gcs >= outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "gcs_total"] 
+         & last_gcs <= outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "gcs_total"]) |>
+  # Group by each patient, selecting the worst of each
+  group_by(hospital_block_id) |>
+  # Select the most recent (last) row for each 
+  slice_max(
+    order_by = gcs_dttm,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  select(hospital_block_id, last_gcs)
+
+final_cohort <- final_cohort |>
+  left_join(last_gcs_tbl, by="hospital_block_id") |>
+  # Assume GCS of 15 if none charted in the ED
+  mutate(last_gcs = coalesce(last_gcs, 15))
+
+```
+
+# Determining time to off respiratory support (i.e., NIV, intubated, etc.)
+```{r Calculate time to off NIV}
+
+# Identifying when the last time a patient needed respiratory support within a given hospital block
+last_resp_device <- clif_respiratory_support |>
+  # Only look at entries NOT within "off NIV" group
+  # Aka, looking only at ones that would make you still on respiratory support
+  filter(!tolower(device_category) %in% NIV_FREE_NAMES & !is.na(device_category)) |>
+  # Only keep entries for hospitalization blocks we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  # Add NIV start time for each hospitalization 
+  left_join(final_cohort |>
+              select(hospital_block_id, niv_start), by = "hospital_block_id")|>
+  # Select only events after NIV has started (include initial event if only event)
+  filter(recorded_dttm >= niv_start)|>
+  collect() |>
+  # Order within each hospitalization
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Take the last instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice_tail(n=1) |>
+  ungroup()
+
+# Add the last recorded time for respiratory device (anything more intense than RA or NC) to final cohort
+final_cohort <- final_cohort |>
+  left_join(
+    last_resp_device |>
+      select(hospital_block_id, last_resp_device_time = recorded_dttm),
+    by = "hospital_block_id"
+  )
+  
+
+# Identify all events after the last respiratory device was started in which there is no NIV or more needed
+off_niv_events <- clif_respiratory_support |>
+  # Only look at entries within "off NIV" group
+  filter(tolower(device_category) %in% NIV_FREE_NAMES) |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  # Add last respiratory device time for each hospitalization 
+  left_join(final_cohort |>
+              select(hospital_block_id, last_resp_device_time), by = "hospital_block_id")|>
+  # Select only events after the last respiratory device was started
+  filter(recorded_dttm > last_resp_device_time) |>
+  collect() |>  
+  # Order within each hospitalization
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Take the first instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice(1) |>
+  ungroup()
+
+final_cohort <- final_cohort |>
+  left_join(
+    off_niv_events |>
+      select(hospital_block_id, niv_stop = recorded_dttm),
+    by = "hospital_block_id"
+  )
+
+# NOTE: this assumes that patients who are discharged when the last charted respiratory device
+# was NIPPV, HFNC, etc. that they go to their discharge location (e.g., home, acute care hospital, etc.)
+# So, these patients will be penalized, similar to death patients
+
+# Clean space
+rm(last_resp_device, off_niv_events)
+```
+
+# Determining number of days off NIV/more invasive in first DAYS_OFF_CUTOFF days from starting NIV
+```{r Determining number of days off NIV/more invasive in first DAYS_OFF_CUTOFF days from starting NIV}
+
+all_resp_events <- clif_respiratory_support |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  # Only keep interpretable device categories
+  filter(!is.na(device_category)) |>
+  # Join to get NIV start time
+  left_join(final_cohort |>
+              select(hospital_block_id, niv_start), by = "hospital_block_id") |>
+  # Set type of device (on_niv (or worse) or off_niv)
+  mutate(
+    on_niv_or_worse = case_when(
+      tolower(device_category) %in% NIV_FREE_NAMES ~ 0,
+      TRUE ~ 1
+    )
+  ) |>
+  collect()|>
+  mutate(window_end = niv_start + lubridate::days(DAYS_OFF_CUTOFF)) |>
+  # Select only events between NIV start and DAYS_OFF_CUTOFF (e.g., 28) days later
+  filter(
+    recorded_dttm >= niv_start,
+    recorded_dttm < window_end
+  ) |>
+  
+  # Calculate amount of time off NIV
+  arrange(hospital_block_id, recorded_dttm) |>
+  group_by(hospital_block_id) |>
+  # Identify how long patient is "NIV free" in first DAYS_OFF_CUTOFF (e.g., 28) days
+  mutate(
+    next_dttm = lead(recorded_dttm),
+    interval_start = recorded_dttm,
+    interval_end = pmin(coalesce(next_dttm, window_end), window_end),
+    interval_hrs = pmax(as.numeric(difftime(interval_end, interval_start, units = "hours")), 0)
+  ) |>
+  summarise(
+    niv_free_hours = sum(ifelse(on_niv_or_worse == 0, interval_hrs, 0), na.rm = TRUE),
+    niv_free_days  = niv_free_hours / 24,
+    .groups = "drop"
+  )
+
+final_cohort <- final_cohort |>
+  left_join(
+    all_resp_events |>
+      select(hospital_block_id, days_off = niv_free_days),
+    by = "hospital_block_id"
+  )
+
+final_cohort <- final_cohort |>
+  mutate(
+    # Set in-hospital death as binary
+    in_hosp_death = ifelse(tolower(discharge_location) == "expired", 1, 0),
+    # Set discharge to hospice as binary
+    hospice = ifelse(str_detect(tolower(discharge_location), regex("hospice", ignore_case = TRUE)) , 1, 0),
+    # Length of respiratory support (NIV +- IMV), no penalization
+    days_of_respiratory_support = as.numeric(difftime(niv_stop, niv_start, units="days")),
+    # Calculate the amount of time off of NIV in the first DAYS_OFF_CUTOFF (e.g., 28) days from starting NIV
+    days_off = ifelse(
+      # If patient died or was discharged to hospice in first DAYS_OFF_CUTOFF (e.g., 28) days from starting NIV
+      (in_hosp_death == 1 | hospice) & as.numeric(difftime(block_end_discharge, niv_start, units="days")) < DAYS_OFF_CUTOFF, 0, days_off
+    )
+  )
+  
+
+```
+
+# Determining if patient was transferred to higher level of care
+```{r Determining if patient was transferred to higher level of care}
+
+# Define increasing acuity locations
+acuity_order <- c("ward" = 1, "stepdown" = 2, "icu" = 3)
+
+# Identify patients who were upgraded
+post_triage_adt <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, stop_ed, triage_location) |>
+  # Select only patients who did NOT start in the ICU
+  # (since ICU patients cannot be transferred to higher level of care)
+  filter(triage_location != "icu") |>
+  left_join(clif_adt |>
+              # Select only "higher levels of care"
+              filter(location_category %in% c("icu", "stepdown")) |>
+              # Select only relevant variables
+              select(hospital_block_id, in_dttm, location_category),
+           by = "hospital_block_id")|>
+  # Select only from locations after the ED
+  filter(in_dttm >= stop_ed) |>
+  # Load in data
+  collect() |>
+  # Give numerical values
+  mutate(
+    triage_level = acuity_order[triage_location],
+    new_level = acuity_order[location_category]
+  ) |>
+  # Keep only rows where there is an escalation in care
+  filter(new_level > triage_level) |>
+  # Grouping by each hopsital block
+  group_by(hospital_block_id) |>
+  # Pick the first escalation
+  slice_min(in_dttm, with_ties = FALSE) |>
+  ungroup() |>
+  # Calculate the first escalation location and time to get there
+  mutate(first_escalation_location = location_category,
+         time_to_escalation_hrs = as.numeric(difftime(in_dttm, stop_ed, units = "hours")))
+
+# Join with final cohort
+final_cohort <- final_cohort |>
+  left_join(post_triage_adt |>
+              select(hospital_block_id, 
+                     first_escalation_location, 
+                     time_to_escalation_hrs),
+            by = "hospital_block_id")
+
+# Clean space
+rm(acuity_order, post_triage_adt)
+```
+
+
+# Cleaning data, penalization
+```{r Creating new columns and cleaning data}
+
+# Calculate various outcomes
+final_cohort <- final_cohort |>
+  mutate(
+    # Calculate LOS, no penalization
+    los = difftime(block_end_discharge, start_ed, units="days"),
+    # Hospice and in-hospital death defined above
+    # Store year
+    year = factor(year(start_ed), levels = sort(unique(year(start_ed)))),
+    # Store season
+    season = case_when(
+      month(start_ed) %in% c(12, 1, 2) ~ "Winter",
+      month(start_ed) %in% 3:5 ~ "Spring",
+      month(start_ed) %in% 6:8 ~ "Summer",
+      month(start_ed) %in% 9:11 ~ "Autumn"
+    ),
+    # Store race, set case (upper/lower)
+    race_summary = factor(ifelse(
+      tolower(race_category) == "white", "White",
+      ifelse(
+        tolower(race_category) == "black or african american", "Black or African American",
+        ifelse(
+          tolower(race_category) == "asian", "Asian", "Other"
+        )
+      )),
+      levels = c("White", "Black or African American", "Asian", "Other")),
+    # Factorize sex, set case (upper/lower)
+    sex_category = factor(ifelse(
+      tolower(sex_category) == "female", "Female",
+      ifelse(
+        tolower(sex_category) == "male", "Male",
+        "Unknown"
+      )
+    ), 
+    levels = c("Male", "Female", "Unknown")),
+    # Factorize ethnicity
+    ethnicity_category = factor(tolower(ethnicity_category), levels = c("hispanic", "non-hispanic")),
+    # Factor last NIV device
+    last_niv_device = factor(
+      ifelse(
+        tolower(last_niv_device) == "nippv", "NIPPV",
+        ifelse(
+          tolower(last_niv_device) == "high flow nc", "High Flow NC",
+          "Other"
+        )
+      ) , levels=c("NIPPV", "High Flow NC")),
+    # Factorize triage location
+    triage_location = factor(triage_location),
+    # Create column to determine if they were upgraded
+    was_escalated = ifelse(is.na(first_escalation_location), 0, 1)
+    )
+
+# Calculate LOS and length of NIV +- IMV penalized for death/hospice
+final_cohort <- final_cohort |>
+  mutate(los_penalized = ifelse(in_hosp_death == 1 | hospice == 1, 
+                                 quantile(final_cohort$los[final_cohort$in_hosp_death == 0], probs = DEATH_PENALTY, na.rm = T), 
+                                 los),
+         # Note: respiratory support is penalizing for death/hospice but also being discharged on NIV or more
+         days_of_respiratory_support_penalized = ifelse(in_hosp_death == 1 | hospice == 1| is.na(days_of_respiratory_support),
+                                                          quantile(final_cohort$days_of_respiratory_support[final_cohort$in_hosp_death == 0], probs = DEATH_PENALTY, na.rm = T), 
+                                                          days_of_respiratory_support
+           
+         ))
+
+```
+
+# Save all encounters
+```{r Save all encounters with stratification}
+write_csv(final_cohort, file.path(paste0(project_location, "/private_tables"), "all_encounters_with_stratification.csv"))
+```
+
+```{r Save one encounter per patient with stratification}
+# Set seed for reproducibility
+set.seed(1)
+
+# Randomly select one row per patient
+final_cohort_trimmed <- final_cohort |>
+  group_by(patient_id) |>
+  slice_sample(n = 1) |>
+  ungroup()
+
+# Write
+write_csv(final_cohort_trimmed, file.path(paste0(project_location, "/private_tables"), "one_encounter_per_pt_with_stratification.csv"))
+```
+
+```{r End time}
+toc()
+```

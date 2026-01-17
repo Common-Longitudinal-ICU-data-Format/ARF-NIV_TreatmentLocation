@@ -1,0 +1,36 @@
+# R specific gitignores
+.Rprofile
+.Rhistory
+.Rprofile
+.Ruserdata
+.DS_Store
+*.Rproj
+.Rproj.user
+
+## ignore the renv initialization file
+initialize_renv.R
+
+## ignore filtered CLIF tables stored as Rdata or .html files from Rmarkdown output
+*.RData
+*.parquet
+*.html
+
+#ignore source CLIF_ files 
+CLIF_*.parquet
+CLIF_*.csv
+CLIF_*.fst
+
+#ignore the identifier app
+CLIF_cohort_identifier*
+
+# ignore file used to initialize renv when creating the template
+initialize_renv.R
+
+# ignore filtered CLIF tables stored as Rdata
+*.RData
+
+# ignore proj_output and proj_tables
+private_tables/
+*_project_output/
+final_federated_outputs/
+global_model_outputs/

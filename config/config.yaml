@@ -1,0 +1,42 @@
+# Add local paath to CLIF tables
+tables_location: "/projects/CLIF-analysis/critill_rclif_2_1/critill_rclif_2_1_tables"
+
+# Add local path to project output location
+project_location: "/projects/CLIF-analysis/imc_arf_hpc/"
+
+# Add your institution name
+institution: "Hopkins"
+# Add your local time zone
+# Options are: EST = 'America/New_York', CST = 'America/Chicago', PST = 'America/Los_Angeles'
+time_zone: "America/New_York"
+
+file_type: "parquet"
+
+
+# THIS IS SET FOR ALL SITES (DO NOT EDIT BELOW)
+
+# Cutoff for describing hospital as IMC capable, 5%
+imc_capable_cutoff: 0.05
+
+# Study timeframe
+study_start: "2018-01-01"
+study_end: "2024-12-31"
+
+
+# For regression:
+
+outcomes: 
+  - "death_hospice" # measured outcome
+  - "death_hospice_icu" # subset to ICU only
+  - "death_hospice_imc" # subset to IMC only
+  - "death_hospice_ward" # subset to ward only
+  - "icu_admit" # process outcome
+  - "imc_admit" # process outcome
+  - "ward_admit" # process outcomes
+  
+covariates:
+  - "age_at_admission"
+  - "is_female"
+  
+strata_var:
+  - "triage_location_formatted"

@@ -1,0 +1,271 @@
+---
+title: "04_ARF_IMC_generate_summary_coeff"
+author: "Sarah Goldfarb"
+date: "2026-01-13"
+output: html_document
+---
+
+# Load the Required Packages, specify local paths
+```{r Load Needed Libraries, include=FALSE}
+packages <- c(
+  "tidyverse",
+  "yaml",
+  "rprojroot"
+)
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+if(config$institution != "Hopkins"){
+  stop("proceed to next file")
+}
+
+# Assign config values to R variables
+project_location <- config$project_location
+outcomes <- config$outcomes
+
+rm(config)
+```
+
+# Define sites, outcomes
+```{r}
+
+# Sites and outcomes
+sites <- c("Hopkins", "Hopkins")
+
+# Output directory for global model outcomes
+if (!dir.exists(paste0(project_location, "/global_model_outputs"))) {
+  dir.create(paste0(project_location, "/global_model_outputs"))}
+global_out_dir <- file.path(project_location, "global_model_outputs")
+
+# Clean outcome name to match local naming convention
+outcome_tag <- function(outcome) gsub("[^A-Za-z0-9_]+", "_", outcome)
+
+```
+
+# Define helper functions to read in local site outcomes
+```{r}
+
+# Get site folder path
+site_export_dir <- function(site) {
+  file.path(project_location, paste0(site, "_project_output"), "global_model_outputs")
+}
+
+# Read Estimates file and return named beta vector in correct order
+read_estimates <- function(path) {
+  # Read csv
+  d <- read_csv(path, show_col_types = FALSE)
+  req <- c("term", "estimate")
+  # Catches if missing required column
+  if (!all(req %in% names(d))) stop("Estimates file missing required columns: ", path)
+  # Return the df
+  d
+}
+
+# Read Covariance file and return matrix with row/colnames
+read_covariance <- function(path) {
+  # Read csv
+  vc <- read_csv(path, show_col_types = FALSE)
+  # Catches if missing required column
+  if (!"row_term" %in% names(vc)) stop("Covariance file missing row_term: ", path)
+  
+  # Coefficient names
+  rn <- vc$row_term
+  # Get numeric covariances
+  vc <- vc |> select(-row_term)
+  # Convert numeric covariances to matrix
+  mat <- as.matrix(vc)
+  # Set the row names as saved coefficient names above
+  rownames(mat) <- rn
+  # Return the covariance matrix
+  mat
+}
+
+```
+
+# Helper function to pool outcomes
+```{r}
+# Returns beta_global (coefficient values) and v_global (covariance values), all pooled
+# Thus, combining site-level regression coefficients (beta) and uncertainty (vcov_list) into a single global coefficient vector and covariance matrix using precision weighted pooling
+pool_precision_weighted <- function(beta_list, vcov_list) {
+  
+  # Define coefficient names based on first site
+  terms <- names(beta_list[[1]])
+  # Define the number of coefficients in the model using the first site
+  p <- length(terms)
+
+  # Sum of precision matrices
+  sumP  <- matrix(0, 
+                  nrow = p, 
+                  ncol = p, 
+                  dimnames = list(terms, terms))
+  # Sum of precision-weighted coefficients
+  sumPb <- rep(0, p)
+  # Set the names as the coefficient names
+  names(sumPb) <- terms
+
+  # Loop over each site, accumulating contributions from each site
+  for (i in seq_along(beta_list)) {
+    # Site-specific coeffs
+    b <- beta_list[[i]]
+    # Site-specific covariances
+    V <- vcov_list[[i]]
+
+    # Precision matrix is inverse of covariance matrix; if low variance, high precision, therefore more weight; opposite with high variance
+    # Try to invert covariance matrix; if singular, error, site cannot be pooled
+    P <- tryCatch(
+      solve(V),
+      error = function(e) stop("Covariance matrix singular / not invertible for one site. ", e$message)
+    )
+
+    # Add current site's precision matrix to sum precision
+    sumP  <- sumP + P
+    
+    # Weigh site's coefficient based on how precise they were
+    sumPb <- sumPb + as.numeric(P %*% b)
+  }
+
+  # Solve for global variances
+  V_global <- solve(sumP)
+  # Solve for global coeffs
+  b_global <- as.numeric(V_global %*% sumPb)
+  # Set the names for coeffs
+  names(b_global) <- terms
+
+  # Return list with pooled coeffs and variances
+  list(beta = b_global, vcov = V_global)
+}
+
+```
+
+# Loop over each outcome to get global variables
+```{r}
+
+for (outcome in outcomes) {
+
+  # Name of the outcome, formatted correctly
+  tag <- outcome_tag(outcome)
+
+  # Initializes site-level files for this outcome
+  est_paths <- c() # Estimates
+  cov_paths <- c() # Covariances
+  site_found <- c() # Sites that successfully contributed
+
+  # Loop over each site
+  for (s in sites) {
+    
+    # Obtain site directory
+    dir_s <- site_export_dir(s)
+
+    # Catches if site directory does not exist
+    if (!dir.exists(dir_s)) {
+      warning("Missing export directory for site: ", s, " (", dir_s, "). Skipping.")
+      next
+    }
+
+    # Saves the file path for site's estimates and covariances
+    est_file <- file.path(dir_s, paste0(s, "_propensity_build_estimates_", tag, ".csv"))
+    cov_file <- file.path(dir_s, paste0(s, "_propensity_build_covariance_", tag, ".csv"))
+
+    # Catches if missing file
+    if (!file.exists(est_file) || !file.exists(cov_file)) {
+      warning("Missing est/cov for site ", s, " outcome ", outcome, ". Skipping.")
+      next
+    }
+
+    # Adds estimates, covariances, site name to current list of contributing sites
+    est_paths <- c(est_paths, est_file)
+    cov_paths <- c(cov_paths, cov_file)
+    site_found <- c(site_found, s)
+  }
+
+  # Catches if only one site is being run
+  if (length(site_found) < 2) {
+    stop("Need at least 2 sites with outputs to pool for outcome ", outcome,
+         ". Found: ", paste(site_found, collapse = ", "))
+  }
+
+  # Read estimates and covariances
+  ests <- purrr::map(est_paths, read_estimates)
+  covs <- purrr::map(cov_paths, read_covariance)
+
+  # Check term consistency across sites
+  # Get term names from each site
+  term_lists <- purrr::map(ests, ~ .x$term)
+  # Collapse each site's term vector into a single string
+  term_signatures <- purrr::map_chr(term_lists, paste, collapse = "|")
+  # Catches if the terms differ between sites (if different, model was not well-harmonized)
+  if (length(unique(term_signatures)) != 1) {
+    term_df <- purrr::imap(term_lists, ~ tibble(site = site_found[.y], term = .x)) |> bind_rows()
+    stop(
+      "Model terms differ across sites for outcome ", outcome, ".\n",
+      paste(capture.output(print(term_df, n = 200)), collapse = "\n")
+    )
+  }
+
+  # Save the ordering of terms
+  terms <- ests[[1]]$term
+
+  # Align coeffs across sites
+  
+  # Build aligned beta vectors and covariance matrices
+  beta_list <- purrr::map(ests, function(d) {
+    b <- d$estimate # Numeric coeff vector
+    names(b) <- d$term # Name each coeff by its term
+    b[terms] # Reorder coeffs/terms to match order defined above
+  })
+
+  # Align covariance matrixes across sites
+  
+  # Make sure each site's covariance matrix rows/cols are in the same order as defined above
+  vcov_list <- purrr::map(covs, function(V) {
+    if (!all(terms %in% rownames(V)) || !all(terms %in% colnames(V))) {
+      stop("Covariance matrix terms do not match estimate terms for outcome ", outcome)
+    }
+    V[terms, terms, drop = FALSE]
+  })
+
+  # Pool site level models into a global model, weighting
+  pooled <- pool_precision_weighted(beta_list, vcov_list)
+
+  # Output tables
+  
+  # Global coeffs with standard erros
+  global_coef <- tibble(
+    outcome = outcome,
+    term = names(pooled$beta),
+    estimate = as.numeric(pooled$beta),
+    std_error = sqrt(diag(pooled$vcov))
+  )
+
+  # Global variances (wide format)
+  global_vcov <- as.data.frame(pooled$vcov) |>
+    rownames_to_column("row_term")
+
+  # Save global outputs
+  write_csv(global_coef, file.path(global_out_dir, paste0("global_coefficients_", tag, ".csv")))
+  write_csv(global_vcov, file.path(global_out_dir, paste0("global_covariance_", tag, ".csv")))
+
+  # Log output here
+  cat(
+    "Pooled global coefficients for outcome: ", outcome,
+    " from sites: ", paste(site_found, collapse = ", "),
+    "\nSaved to: ", global_out_dir, "\n\n",
+    sep = ""
+  )
+}
+```
+

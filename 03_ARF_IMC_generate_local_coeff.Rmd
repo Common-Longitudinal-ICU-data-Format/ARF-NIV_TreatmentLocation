@@ -1,0 +1,270 @@
+---
+title: "03_ARF_IMC_generate_local_coeff"
+author: "Sarah Goldfarb"
+date: "2026-01-13"
+output: html_document
+---
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+packages <- c(
+  "tidyverse",
+  "yaml",
+  "rprojroot",
+  "stringr"
+)
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+covariates <- config$covariates
+outcomes <- config$outcomes
+
+rm(config)
+```
+
+# Create folders if needed
+```{r Create folders if needed, include=FALSE}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/global_model_outputs"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/global_model_outputs"))
+}
+
+export_dir <- file.path(paste0(project_location, site, "_project_output/global_model_outputs"))
+```
+
+# Reading in data
+```{r Read in cohort}
+final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+
+reformat_cohort_cols <- function(df) {
+  
+  # Set order of triage location for foactoring
+  traige_location_factors <- c("ICU", "IMC", "Ward")
+  traige_location_imc_factors <- c("ICU (+)", "ICU (-)", "IMC", "Ward (+)", "Ward (-)")
+  
+  
+  return(df |>
+  mutate(
+    # Format triage location
+    triage_location_formatted = case_when(
+      triage_location == "icu" ~ "ICU",
+      triage_location == "stepdown" ~ "IMC",
+      triage_location == "ward" ~ "Ward",
+      TRUE ~ triage_location),
+    # Set triage location as factor
+    triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+    # Categorize triage location based on IMC availability
+    traige_location_imc_avail = case_when(
+      triage_location_formatted == "ICU" & imc_capable == 1 ~ "ICU (+)",
+      triage_location_formatted == "ICU" ~ "ICU (-)",
+      triage_location_formatted == "IMC" ~ "IMC",
+      triage_location_formatted == "Ward" & imc_capable == 1 ~ "Ward (+)",
+      triage_location_formatted == "Ward" ~ "Ward (-)",
+      TRUE ~ triage_location_formatted
+    ),
+    # Set triage  as factor
+    traige_location_imc_avail = factor(traige_location_imc_avail, levels = traige_location_imc_factors),
+    # Factor race
+    race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
+    # Factor last NIV device
+    last_niv_device = factor(last_niv_device, levels=c("NIPPV", "High Flow NC")),
+    # Factor type of ARF
+    physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+    # Create binary variable if patient is female
+    is_female = ifelse(tolower(sex_category) == "female", 1, 0),
+    
+    # Binary variable if patient had imv (set as NA if patient was DNI)
+    imv = ifelse(is_dni, NA, ifelse(was_trach == 1 | was_intubated == 1, 1, 0)),
+    
+    # Binary variable if patient died or discharged to hospice at all
+    death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
+    
+    # Create log10 scale for relevant variables
+    los_pen_logged = log10(los_penalized),
+    
+    # Create indicator variable for whether patient was admitted to ICU, stepdown, ward
+    icu_admit = ifelse(triage_location_formatted == "ICU", 1, 0),
+    imc_admit = ifelse(triage_location_formatted == "IMC", 1, 0),
+    ward_admit = ifelse(triage_location_formatted == "Ward", 1, 0),
+    
+    
+    # Binary variable if patient died or discharged to hospice within the given unit level
+    death_hospice_icu = case_when(
+      icu_admit == 1 & death_hospice == 1 ~ 1,
+      icu_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    ),
+    death_hospice_imc = case_when(
+      imc_admit == 1 & death_hospice == 1 ~ 1,
+      imc_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    ),
+    death_hospice_ward = case_when(
+      ward_admit == 1 & death_hospice == 1 ~ 1,
+      ward_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    )
+    
+  ))
+}
+
+final_cohort <- reformat_cohort_cols(final_cohort)
+```
+
+# Fit local risk model and export coef/vcov to prepare for global pooling
+```{r}
+# Generate propensity score (do not include triage location or hospital here) for each outcome
+
+# Iterate over each outcome
+for (outcome in outcomes){
+  
+  # ------------
+  # Define model and data
+  # ------------
+  
+  # Define model formula
+  model_form <- as.formula(paste0(outcome, " ~ ", paste(covariates, collapse = " + ")))
+  
+  # Define the columns needed to run regression 
+  needed_cols <- c(outcome, covariates)
+
+  # Subset dataframe if looking at outcome set to only that cohort
+  if(str_ends(outcome, "_icu")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "ICU")
+    cat("Subsetted to ICU for outcome: ", outcome,"\n")
+  } else if(str_ends(outcome, "_imc")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "IMC")
+    cat("Subsetted to IMC for outcome: ", outcome,"\n")
+  } else if(str_ends(outcome, "_ward")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "Ward")
+    cat("Subsetted to Ward for outcome: ", outcome,"\n")
+  }
+  else{
+    df <- final_cohort
+    cat("No subset for outcome: ", outcome,"\n")
+  }
+  
+  # Selecting only needed columns, requiring all to have data
+  df <- df |>
+    select(dplyr::all_of(needed_cols)) |>
+    drop_na()
+  
+  # Basic safety checks
+  if (nrow(df) < 50){
+    warning("Too few complete-case rows for ", outcome, ": n=", nrow(df))
+    next
+  } 
+  if (!all(df[[outcome]] %in% c(0, 1))) {
+    warning("Outcome must be coded 0/1 for ", outcome)
+    next
+  }
+  if (n_distinct(df[[outcome]]) < 2){
+    warning("Outcome has no variation after filtering for ", outcome)
+    next
+  }
+
+  # Define number of complete cases
+  n_cc <- nrow(df)
+  # Define number of events among the complete cases
+  events_cc <- sum(df[[outcome]] == 1, na.rm = TRUE)
+
+  # ------------
+  # Fit a local GLM and export coeffs
+  # ------------
+  
+  # Run GLM
+  mod <- glm(model_form, data = df, family = binomial())
+
+  # Define coeffs
+  coef_tbl <- tibble(
+    site = site,
+    outcome = outcome,
+    n_complete_case = n_cc,
+    events_complete_case = events_cc,
+    term = names(coef(mod)), # Returns the col titles of intercept and coefficients from model
+    estimate = as.numeric(coef(mod)) # Returns the values of intercept and coefficients from model
+  )
+
+  # Renames variables to use underscores instead of spaces, slashes, etc.
+  outcome_tag <- gsub("[^A-Za-z0-9_]+", "_", outcome)
+
+  # Save
+  write_csv(
+    coef_tbl,
+    file.path(export_dir, paste0(site, "_propensity_build_estimates_", outcome_tag, ".csv"))
+  )
+
+  # ------------
+  # Export wide covariance matrix
+  # ------------
+  
+  # Identify values for covariance matrix (captures how confident the site is about each coefficient)
+  vc <- as.data.frame(vcov(mod))
+  
+  # Preserve term names explicitly
+  vc <- rownames_to_column(vc, "row_term")
+  
+  # Save
+  write_csv(
+    vc,
+    file.path(export_dir, paste0(site, "_propensity_build_covariance_", outcome_tag, ".csv"))
+  )
+
+  # ------------
+  # EXTRA: site data for quality control if needed
+  # ------------
+  qc_tbl <- tibble::tibble(
+    site = site, # Site name
+    outcome = outcome, # Outcome name
+    n_complete_case = n_cc, # Total number of complete cases
+    events_complete_case = events_cc, # Total number of events
+    event_rate_complete_case = events_cc / n_cc, # Calculate rate of outcome occurring
+    converged = isTRUE(mod$converged) # Save whether model converges (catch silently failed models)
+  )
+
+  write_csv(
+    qc_tbl,
+    file.path(export_dir, paste0(site, "_propensity_build_qc_", outcome_tag, ".csv"))
+  )
+
+  # ------------
+  # Log complete message
+  # ------------
+  cat("Exported local coef/vcov/QC for outcome: ", outcome, "\n\n")
+
+}
+
+```

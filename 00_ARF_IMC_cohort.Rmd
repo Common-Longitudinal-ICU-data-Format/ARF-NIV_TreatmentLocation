@@ -1,0 +1,837 @@
+---
+title: "00_ARF_IMC_capacity_cohort"
+author: "Sarah Goldfarb"
+date: "2026-01-13"
+output: html_document
+---
+
+# Load the Required Packages
+```{r Load Needed Libraries, include=FALSE}
+packages <- c("duckdb", 
+              "lubridate", 
+              "tidyverse", 
+              "dplyr",
+              "table1", 
+              "broom", 
+              "arrow", 
+              "rvest", 
+              "readr", 
+              "fst", 
+              "data.table", 
+              "collapse", 
+              "tictoc",
+              "yaml",
+              "rprojroot")
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+
+#Use Dplyr functions as default
+filter <- dplyr::filter
+mutate <- dplyr::mutate
+select <- dplyr::select
+arrange <- dplyr::arrange
+group_by <- dplyr::group_by
+summarise <- dplyr::summarise
+lead <- dplyr::lead
+lag <- dplyr::lag
+coalesce <- dplyr::coalesce
+n <- dplyr::n
+
+```
+
+# Load config to specify local paths
+```{r Use YAML config to define values to R variables}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+
+# Cutoff for describing hospital as IMC capable
+IMC_CAPABLE_CUTOFF <- config$imc_capable_cutoff
+
+# Study start and end
+STUDY_START <- as.POSIXct(config$study_start, tz=site_time_zone) # Start time
+STUDY_END <- as.POSIXct(config$study_end, tz=site_time_zone) # End time
+
+rm(config)
+```
+
+```{r Create folders if needed, include=FALSE}
+#Create Sub Folders within Project Folder
+# Check if the output directory exists; if not, create it
+if (!dir.exists(paste0(project_location, "/private_tables"))) {
+  dir.create(paste0(project_location, "/private_tables"))
+}
+if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output"))
+}
+```
+
+```{r Keep track of how long this takes to run}
+tic()
+```
+
+# Load the Required CLIF Tables
+```{r Specify required CLIF tables}
+#List of table names from CLIF 2.0
+tables <- c("patient", "hospitalization", "vitals", "labs", 
+            "medication_admin_continuous", "adt", 
+            "patient_assessments", "respiratory_support", "position", 
+            "dialysis", "intake_output", "ecmo_mcs", "procedures", 
+            "admission_diagnosis", "provider", "sensitivity", 
+            "medication_orders", "medication_admin_intermittent", 
+            "therapy_details", "microbiology_culture", "sensitivity", "microbiology_nonculture", "code_status", "hospital_diagnosis", "crrt_therapy")
+
+# Tables that should be set to TRUE for this project
+true_tables <- c("hospitalization", "adt", "respiratory_support", "medication_admin_continuous", "code_status", "hospital_diagnosis", "crrt_therapy")
+
+# Create a named vector and set the boolean values
+table_flags <- setNames(tables %in% true_tables, tables)
+```
+
+```{r Load relevant CLIF tables, include=FALSE}
+# List all CLIF files in the directory
+clif_table_filenames <- list.files(path = tables_location, 
+                                   pattern = paste0("^clif_.*\\.", file_type, "$"), 
+                                   full.names = TRUE)
+
+# Extract the base names of the files (without extension)
+clif_table_basenames <- basename(clif_table_filenames) |>
+  str_remove(paste0("\\.", file_type, "$"))
+
+# Create a lookup table for required files based on table_flags
+required_files <- paste0("clif_", names(table_flags)[table_flags])
+
+# Check if all required files are present
+missing_tables <- setdiff(required_files, clif_table_basenames)
+if (length(missing_tables) > 0) {
+  stop(paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")))
+}
+
+# Filter only the filenames that are required
+required_filenames <- clif_table_filenames[clif_table_basenames %in% required_files]
+
+# Read the required files into a list of data frames
+if (file_type == "parquet") {
+  data_list <- lapply(required_filenames, open_dataset)
+} else if (file_type == "csv") {
+  data_list <- lapply(required_filenames, read_csv)
+} else if (file_type == "fst") {
+  data_list <- lapply(required_filenames, read.fst)
+} else {
+  stop("Unsupported file format")
+}
+
+# Assign the data frames to variables based on their file names
+for (i in seq_along(required_filenames)) {
+  # Extract the base name of the file (without extension)
+  object_name <- str_remove(basename(required_filenames[i]), paste0("\\.", file_type, "$"))
+  # Make the object name valid for R (replace invalid characters with underscores)
+  object_name <- make.names(object_name)
+  # Assign the tibble to a variable with the name of the file
+  assign(object_name, data_list[[i]])
+}
+```
+
+```{r}
+# Outlier thresholds
+outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/project_outlier_thresholds.csv"), show_col_types=FALSE)
+```
+
+# Specify global variable names
+```{r Specify time period and other parameters}
+
+STABILITY_WINDOW_MINS <- 6 * 60 # Minimum number of minutes of NIV to be included
+MAX_NIV_BREAK_MINS <- 2 * 60 # Maximum amount of minutes allowed off NIV within STABILITY_WINDOW_MINS from starting  
+NIV_NAMES <- c("nippv", "high flow nc") # Device names that are included as NIV
+ED_ALLOWED_LOCATIONS <- c("ed", "procedural", "other") # Lists locations that would be considered still part of ED time
+
+HOSPITAL_BLOCK_TIME_HRS <- 6 # Maximum number of hours allowed between hospitalizations to make them blocked together
+
+# Age limits for study, defined by outlier_thresholds file
+AGE_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "age_at_admission"]
+AGE_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "age_at_admission"]
+```
+
+# Create hospital blocks from patient age, timeframe
+```{r Create hospital blocks}
+# Select only hospitalizations that fit the below criteria
+# Only set the starting time admission (study end cutoff below as to not remove ends of hospital blocks)
+clif_hospitalization <- clif_hospitalization |>
+  filter(age_at_admission >= AGE_MIN, 
+         admission_dttm >= STUDY_START)|>
+  compute()
+
+# Collect CLIF hopsitalization data as a data table
+hospitalization_information <- as.data.table(clif_hospitalization)
+
+# Order by patient ID and admission date/time
+setorder(hospitalization_information, patient_id, admission_dttm)
+
+# Create column taht stores the time of previous discharge
+hospitalization_information[, prev_discharge := shift(discharge_dttm, n = 1), by = patient_id]
+
+# Create column that stores the gap in hours between current admission and prior discharge
+hospitalization_information[, gap_hours := as.numeric(difftime(admission_dttm, prev_discharge, units = "hours"))]
+
+# Flag a hospitalization if it represents a new hospital block
+hospitalization_information[, new_block := is.na(prev_discharge) | gap_hours > HOSPITAL_BLOCK_TIME_HRS]
+
+# Compute cumulative block number per patient (e.g., first hospital block =1 , second = 2, etc.)
+hospitalization_information[, block_num := cumsum(replace_na(new_block, TRUE)), by = patient_id]
+
+# Determine end of hospitalization time for discharge location
+hospitalization_information[, end_ts := coalesce(discharge_dttm, admission_dttm)]
+
+
+#Remove helper columns
+hospitalization_information[, c("prev_discharge", "gap_hours", "new_block") := NULL]
+
+# Create functions to return NA (if it is NA) or the min/max of a group
+max_or_na <- function(x) if(all(is.na(x))) as.POSIXct(NA) else max(x, na.rm = TRUE)
+min_or_na <- function(x) if(all(is.na(x))) as.POSIXct(NA) else min(x, na.rm = TRUE)
+
+# Store information on grouped hospitalizations (hospital blocks)
+hospital_blocks <- hospitalization_information[, .(
+  # Stores the patient age on first admission within block
+  age_at_admission = min_or_na(age_at_admission),
+  # Stores the start of the hospital block time
+  block_start_admit = min_or_na(admission_dttm),
+  # Stores the end of the hospital block time
+  block_end_discharge = max_or_na(discharge_dttm),
+  # Number of hospitalizations within a block
+  num_hospitalizations = .N,
+  # Stores the discharge location from last admission within block
+  discharge_location = discharge_category[which.max(end_ts)] 
+), by = .(patient_id, block_num)]
+
+# Create unique hospital block IDs
+hospital_blocks[, hospital_block_id := paste0(patient_id, "_", format(block_start_admit, "%Y%m%d%H%M%S"))]
+
+# Filter blocks within study period (already filtered for start and min age above)
+hospital_blocks <- hospital_blocks[block_start_admit <= STUDY_END &
+                                     age_at_admission <= AGE_MAX]
+
+# Create key for each hospitalization_id to link to hospitalization block
+hospital_block_key <- hospitalization_information[hospital_blocks, 
+  on = .(patient_id, block_num), 
+  nomatch = 0][
+    , .(hospitalization_id, patient_id, hospital_block_id,
+        block_num, num_hospitalizations,
+        block_start_admit, block_end_discharge, discharge_location)
+  ]
+```
+
+# Add hospital blocks to all CLIF tables
+```{r Add hospital blocks to all CLIF tables}
+
+hospital_block_key_obj <- arrow::arrow_table(
+  hospital_block_key |>
+    select(patient_id,
+           hospitalization_id,
+           hospital_block_id,
+           block_start_admit,
+           block_end_discharge,
+           discharge_location))
+
+clif_hospitalization <- clif_hospitalization |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id", "patient_id")) |>
+  compute()
+
+clif_adt <- clif_adt |>
+  select(hospitalization_id, hospital_id, hospital_type, in_dttm, out_dttm, location_name, location_category, location_type) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_respiratory_support <- clif_respiratory_support |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_hospital_diagnosis <- clif_hospital_diagnosis |>
+  # ensure same datatype
+  mutate(hospitalization_id = as.character(hospitalization_id)) |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_medication_admin_continuous <- clif_medication_admin_continuous |>
+  filter(admin_dttm >= as.POSIXct(STUDY_START)) |>
+  filter(med_group == "vasoactives") |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+clif_crrt_therapy <- clif_crrt_therapy |>
+  inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+  compute()
+
+```
+
+## Keep track of cohort size
+```{r Keep track of cohort size}
+
+cohort_size <- data.frame(
+  step = integer(),
+  description = character(),
+  n_encounters = integer(),
+  n_patients = integer(),
+  stringsAsFactors = FALSE
+)
+```
+
+## Grouping ED blocks
+```{r Grouping ED blocks}
+final_cohort <-  clif_adt |>
+  # Select only adt events within inclusion criteria (adult, study window, etc)
+  semi_join(clif_hospitalization, by = "hospital_block_id") |>
+  # Join with hospital diagnosis
+  left_join(
+    clif_hospital_diagnosis |>
+      # Select only primary diagnosis with an actual code
+      filter(diagnosis_primary == 1, !is.na(diagnosis_code)) |>
+      # Select relevant columns and rename
+      select(hospitalization_id,
+             primary_diagnosis = diagnosis_code,
+             diagnosis_code_format) |>
+      # For each hospitalization, there should only be one primary diagnosis
+      # However, if there are multiple, take the first one
+      group_by(hospitalization_id) |>
+      summarise(
+        primary_diagnosis = min(primary_diagnosis),
+        diagnosis_code_format = min(diagnosis_code_format),
+        .groups = "drop"
+      ), by="hospitalization_id"
+  )|>
+  collect()
+
+# Set final cohort as a data table
+setDT(final_cohort)
+
+# Precompute string operations
+final_cohort[,location_lower := tolower(location_category)]
+final_cohort[,ed_equivalent := location_lower %chin% ED_ALLOWED_LOCATIONS]
+
+# Set order within the data table
+setorder(final_cohort, hospital_block_id, in_dttm)
+
+# Identify and select only blocks that start in the ed
+ed_starting_blocks <- final_cohort[, .(starts_with_ed = first(location_lower) == "ed"), 
+                                   by = hospital_block_id][starts_with_ed == TRUE, hospital_block_id]
+final_cohort <- final_cohort[hospital_block_id %chin% ed_starting_blocks]
+
+# Add the first and last hospital information, diagnosis information
+final_cohort[, `:=` (
+  first_hospital_id = first(hospital_id),
+  first_hospital_type = first(hospital_type),
+  last_hospital_id = last(hospital_id),
+  last_hospital_type = last(hospital_type),
+  # Take the primary diagnosis associated with the last hospitalization 
+  # E.g., if there are two hospitalizations, take the one affiliated with the second
+  # Note: if multiple primary diagnosis within the last hospitalization in a block, will take first (alphanumerically) diagnosis of the last (chronilogically) hospitalization wtihin the block
+  primary_diagnosis = last(primary_diagnosis), 
+  diagnosis_code_format = last(diagnosis_code_format)
+), by = hospital_block_id]
+
+# Add triage location info and row numbers
+final_cohort[, `:=`(
+  # Identify the index of first traige location (e.g., ward, icu, stepdown); set to NA if dishcarge
+  triage_idx = fcoalesce(match(TRUE, !ed_equivalent), NA_integer_),
+  row_num = .I - .I[1] + 1
+), by = hospital_block_id]
+
+# Identify the first triage location; set to discharge if index for it does not exist
+final_cohort[, `:=`(
+  triage_location = ifelse(
+    is.na(triage_idx),
+    "discharge",
+    location_category[triage_idx]
+  ),
+  triage_location_raw = ifelse(
+    is.na(triage_idx),
+    "discharge",
+    location_name[triage_idx]
+  )
+), by = hospital_block_id]
+
+
+# Only keep rows before triage
+final_cohort <- final_cohort[is.na(triage_idx) | row_num < triage_idx]
+
+# Remove trailing non-ED locations
+final_cohort[, max_ed_out := max(out_dttm[location_lower == "ed"], na.rm = TRUE), by = hospital_block_id]
+final_cohort <- final_cohort[out_dttm <= max_ed_out]
+
+# Summarize
+final_cohort <- final_cohort[, {
+  .(patient_id = patient_id[1L],
+    start_ed = min(in_dttm),
+    stop_ed = max(out_dttm),
+    ed_hours = as.numeric(difftime(max(out_dttm), min(in_dttm), units="hours")),
+    triage_location = triage_location[1L],
+    triage_location_raw = triage_location_raw[1L],
+    first_hospital_id = first_hospital_id[1L],
+    first_hospital_type = first_hospital_type[1L],
+    last_hospital_id = last_hospital_id[1L],
+    last_hospital_type = last_hospital_type[1L],
+    primary_diagnosis = primary_diagnosis[1L],
+    diagnosis_code_format = diagnosis_code_format[1L]
+  )
+}, by = hospital_block_id]
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 0,
+    description = "All adult ED encounters within date range",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+
+```
+# Inclusion and Exclusion Criteria
+
+## Inclusion Criteria: NIV started in ED
+```{r Inclusion Criteria: NIV started in ED}
+# Inclusion: Only keep ED intervals with >= 1 NIV
+final_cohort <- arrow::arrow_table(final_cohort) |>  
+  # Link hospitalizations to any respiratory support event
+  inner_join(
+    clif_respiratory_support |>
+      select(hospital_block_id, recorded_dttm, device_category),
+    by = "hospital_block_id"
+  ) |>
+  # Select only respiratory support events that are NIV and within a given ED encounter
+  filter(
+    tolower(device_category) %in% NIV_NAMES,
+    recorded_dttm >= start_ed,
+    recorded_dttm <= stop_ed
+  ) |>
+  distinct() |>
+  collect() |>
+  group_by(hospital_block_id) |>
+  # Select only the first NIV within the ED
+  slice_min(recorded_dttm, with_ties = FALSE) |>
+  ungroup() |>
+  # Rename column to set when NIV is started
+  rename(niv_start = recorded_dttm)|>
+  # Rename column to set device category as the starting device
+  rename(first_niv_device = device_category) |>
+  # Create column that defines the cutoff for an early end of NIV
+  mutate(stability_window_end = niv_start + STABILITY_WINDOW_MINS * 60)  # seconds
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 1,
+    description = "Including: Where NIV is started in the ED",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+## Inclusion Criteria: NIV must last for at least STABILITY_WINDOW_MINS with a maximum of MAX_NIV_BREAK_MINS not on NIV
+```{r Inclusion Criteria: NIV started in ED, lasting for at least STABILITY_WINDOW_MINS hours with a maximum of MAX_NIV_BREAK_MINS hours not on NIV}
+niv_data <-  arrow::arrow_table(final_cohort) |>  
+  # Link hospitalizations to any respiratory support event
+  inner_join(
+    clif_respiratory_support |>
+      select(hospital_block_id, recorded_dttm, device_category),
+    by = "hospital_block_id"
+  ) |>
+  # Collecting before filter because it errors the other way around
+  collect() |>
+  # Select only respiratory support events that are NIV and within a given ED encounter
+  filter(
+    recorded_dttm >= niv_start,
+    recorded_dttm <= stability_window_end
+  ) |>
+  # Group by individual hospitalization block
+  group_by(hospital_block_id) |>
+  # Organize chronologically
+  arrange(recorded_dttm) |>
+  mutate(
+    # Set start time for next respiratory device
+    next_start = lead(recorded_dttm),
+    # Set the end time for this respiratory device based on start of next (or end of NIV reading window)
+    seg_end = pmin(coalesce(next_start, stability_window_end), stability_window_end),
+    # Set the time for this respiratory device
+    time_mins = as.numeric(difftime(seg_end, recorded_dttm, units="mins")),
+    # Flags if a device is considered NIV
+    is_niv = tolower(device_category) %in% NIV_NAMES
+  ) |>
+  # Drop zero/negative lengths
+  filter(time_mins > 0) |>
+  summarise(
+    # Total amount of time on NIV
+    total_mins_niv = sum(if_else(is_niv, time_mins, 0), na.rm = TRUE),
+    # Total amount of time not on NIV (should add with total NIV to make length of stability window)
+    total_mins_non_niv = sum(if_else(is_niv, 0, time_mins), na.rm = TRUE),
+
+    # Lists of all NIV devices used during window
+    niv_devices_used = if (any(is_niv))
+      paste(unique(device_category[is_niv]), collapse = ", ")
+    else NA_character_,
+
+    # Most recent NIV device used
+    last_niv_device = dplyr::last(device_category[is_niv], default = NA_character_),
+
+    # Identifies the most used NIV device during the stability window
+    most_used_niv_device = if (any(is_niv))
+      names(which.max(tapply(time_mins[is_niv], device_category[is_niv], sum, na.rm = TRUE)))
+    else NA_character_,
+    .groups = "drop"
+  )
+  
+# Join cohort with NIV data
+final_cohort <- final_cohort |>
+  left_join(
+    niv_data,
+    by = c("hospital_block_id")
+  ) 
+
+# Select only cases where NIV block is at least STABILITY_WINDOW_MINS (i.e., no more than MAX_NIV_BREAK_MINS minutes of non-NIV)
+final_cohort <- final_cohort |>
+  filter(total_mins_non_niv <= MAX_NIV_BREAK_MINS)
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 2,
+    description = "Including: Where NIV lasts long enough",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+## Inclusion Criteria: Admitted to Ward, IMC, or ICU within the same hospital system
+```{r}
+# Only include patients who are admitted to ward, IMC, or ICU
+final_cohort <- final_cohort |>
+  filter(tolower(triage_location) %in% c("icu", "stepdown", "ward"))
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 3,
+    description = "Including: Admitted to ICU, IMC, or ward at same hospital system",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+
+## Exclusion Criteria: Patient still admitted
+```{r Exclusion: Patient still admitted}
+
+final_cohort <- final_cohort |>
+  # Load hospital block information
+  left_join(
+    hospital_blocks |>
+      select(hospital_block_id, block_end_discharge, 
+             age_at_admission, discharge_location),
+    by = "hospital_block_id"
+  )
+
+final_cohort <- final_cohort |>
+  # Remove patients who are still admitted
+  filter(
+    # No discharge date
+    !is.na(block_end_discharge),
+    # Discharge set as "Still admitted"
+    tolower(discharge_location) != "still admitted"
+    ) |>
+  # Set discharge location to unknown if NA or missing
+  mutate(discharge_location = ifelse(
+    is.na(discharge_location) | tolower(discharge_location) == "missing", "Unknown",
+    discharge_location)
+  )
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 4,
+    description = "Excluding: Patient still admitted",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+
+```
+
+## Exclusion Criteria: Code status allow natural death time exiting ED
+```{r Exclusion Criteria: Code status allow natural death at time exiting ED}
+
+# Only keep code status entries for patients included
+clif_code_status <- clif_code_status |>
+  filter(patient_id %in% final_cohort$patient_id) |>
+  compute()
+
+# Store all code status at time of admission
+admission_code_status <- arrow::arrow_table(final_cohort) |>
+  # Select relevant columns
+  select(hospital_block_id, patient_id, stop_ed) |>
+  # Join with code status
+  left_join(clif_code_status, by="patient_id") |>
+  # Only keep code status entries that are set before the patient leaves the ED
+  # Also keep patients who have no code status set
+  filter(start_dttm <= stop_ed) |>
+  collect() |>
+  # For each hospitalization, get the most recent code status before leaving ED
+  # Note: this can include code status from prior hospitalization
+  group_by(hospital_block_id) |>
+  arrange(desc(start_dttm)) |>
+  slice_head(n = 1) |>
+  ungroup() 
+
+# Remove patients who have allow natural death as code status at time of leaving ED
+final_cohort <- final_cohort |>
+  # Save patient code status on admission
+  left_join(admission_code_status |>
+              select(hospital_block_id, code_status_category), 
+            by ="hospital_block_id") |>
+  # Remove patients with code status of allowing natural death (comfort care)
+  # Also keeping patients who have no code status
+  filter(is.na(code_status_category) | tolower(code_status_category) != "and") |>
+  # Set code status to presumed full if none is documented at time of admission
+  mutate(code_status_category = coalesce(code_status_category, "Presume Full")) |>
+  # Label patients who are DNI
+  mutate(is_dni = ifelse(str_detect(tolower(code_status_category), "dni"), 1, 0))
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 5,
+    description = "Excluding: Patient code status AND on admission",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+## Exclusion Criteria: Any IMV or tracheostomy in the ED
+```{r Exclusion: Any IMV or tracheostomy in the ED}
+
+# Identify all "first" intubation events within a hospital block, no matter the time
+intubation_events <- clif_respiratory_support |>
+  # Only look at imv entries
+  filter(tolower(device_category) == "imv") |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  collect() |>
+  # Order within each hospitalization
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Take the first instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice(1) |>
+  ungroup()
+
+# Identify all "first" trach events within a hospital block, no matter the time
+trach_events <- clif_respiratory_support |>
+  # Only look at trach entries
+  filter(tracheostomy == 1) |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  collect() |>
+  # Order within each hospitalization
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Take the first instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice(1) |>
+  ungroup()
+
+# Store the first intubation times and trach times
+final_cohort <- final_cohort |>
+  left_join(
+    intubation_events |>
+      select(hospital_block_id, first_intubation_time = recorded_dttm),
+    by = "hospital_block_id"
+  )|>
+  left_join(
+    trach_events |>
+      select(hospital_block_id, first_trach_time = recorded_dttm),
+    by = "hospital_block_id"
+  )
+
+# Remove hospital blocks where the patient starts IMV before they leave the ED
+# Note: this allows IMV in the stability window if it is before the end of the ED
+final_cohort <- final_cohort |>
+  filter(
+    # Keep cases when the first intubation is later than the ED (always keep if no intubation occured)
+    # AND cases where the first trach is later than the ED (always keep if no trach occured)
+    coalesce(first_intubation_time > stop_ed, TRUE) &
+      coalesce(first_trach_time > stop_ed, TRUE)
+  )
+
+# Store information whether patient was intubated/trached and when
+final_cohort <- final_cohort |>
+  mutate(time_to_intubation = difftime(first_intubation_time, niv_start, units="days"),
+         was_intubated = ifelse(is.na(time_to_intubation), 0, 1),
+         time_to_trach = difftime(first_trach_time, niv_start, units="days"),
+         was_trach = ifelse(is.na(first_trach_time), 0, 1))
+
+# Output to log file and view cohort size
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 6,
+    description = "Excluding: IMV or tracheostomy in ED",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+## Exclusion Criteria: Any continuous pressors in the ED
+```{r}
+
+# Identify all events where pressors were used in the ED
+pressor_events <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stop_ed) |>
+  inner_join(clif_medication_admin_continuous |>
+              # Select only relevant pressors
+              filter(med_group == "vasoactives") |>
+              # Select only relevant variables
+              select(hospital_block_id, dttm=admin_dttm,
+                     med_category, dose=med_dose, mar_action_name),
+           by = "hospital_block_id")|>
+  # Select only meds from when patient was in the ED
+  filter(
+    dttm >= start_ed,
+    dttm <= stop_ed,
+    # Remove cases when stopped
+    tolower(mar_action_name) != "stopped"
+  ) |>
+  # Select only rows with valid (existing, numeric, and positive) values
+  filter(!is.na(dose) & !is.nan(dose) & dose > 0) |>
+  # Select only hospital block IDs
+  select(hospital_block_id) |>
+  # Filter to unique hospital block IDs
+  distinct(hospital_block_id)|>
+  # Load in data
+  collect()
+
+# Remove these cases from the final cohort
+final_cohort <- final_cohort |>
+  anti_join(pressor_events, 
+            by = "hospital_block_id"
+  )
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 7,
+    description = "Excluding: Continuous pressors in ED",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+## Exclusion Criteria: Any CRRT in ED
+```{r}
+
+crrt_events <- arrow::arrow_table(final_cohort) |>
+  select(hospital_block_id, start_ed, stop_ed) |>
+  inner_join(clif_crrt_therapy, by = "hospital_block_id") |>
+  # Select only crrt from when patient was in the ED
+  filter(
+    recorded_dttm >= start_ed,
+    recorded_dttm <= stop_ed
+  ) |>
+  collect()
+
+
+# Remove these cases from the final cohort
+final_cohort <- final_cohort |>
+  anti_join(crrt_events, 
+            by = "hospital_block_id"
+  )
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 8,
+    description = "Excluding: CRRT in ED",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+
+```
+
+## Categorizing hospitals as IMC capable
+## Also excluding any patients admitted to IMC at IMC-incapable hospital
+```{r}
+# Create key of whether each hospital at site is IMC capable
+hospital_imc_capability <- final_cohort |>
+  # Group by presenting hospital (not block)
+  group_by(first_hospital_id) |>
+  # Categorize rows as has_imc if traige_location == "imc" for any row
+  # Categorize rows as imc_capable == 1 if number of rows for traige_location == "imc" >= IMC_CAPABLE_CUTOFF 
+  summarise(
+    total_rows = n(),
+    imc_rows = sum(as.integer(tolower(triage_location) == "stepdown", na.rm = TRUE)),
+    has_imc = ifelse(imc_rows > 0, 1, 0),
+    imc_capable = ifelse((imc_rows / total_rows) >= IMC_CAPABLE_CUTOFF, 1, 0),
+    .groups = "drop"
+  ) |>
+  # Select only relevant columns
+  select(first_hospital_id, has_imc, imc_capable)
+
+# Join IMC capability of hospital for each encounter
+final_cohort <- final_cohort |>
+  # Join with hospital_imc_capability
+  left_join(hospital_imc_capability, by = "first_hospital_id")
+
+# Identify any rows where patient was admitted to IMC at IMC-incapable hospital
+imc_at_incapable <- final_cohort |>
+  filter(tolower(triage_location) == "stepdown",
+         imc_capable == 0)
+
+# Remove these cases from the final group
+final_cohort <- final_cohort |>
+  anti_join(imc_at_incapable, 
+            by = "hospital_block_id"
+  )
+
+# Update cohort size 
+cohort_size <- cohort_size |>
+  add_row(
+    step = 9,
+    description = "Excluding: Patients admitted to an IMC at a hospital deemed IMC-incapable",
+    n_encounters = nrow(final_cohort),
+    n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+  )
+```
+
+# Output files defining cohort
+```{r Output cohort into csv}
+# Cohort size
+write_csv(cohort_size, file.path(paste0(project_location, "/", site,"_project_output/"), paste0(site,"_cohort_size.csv")))
+
+# Send to csv
+write_csv(final_cohort, file.path(paste0(project_location, "/private_tables"), "all_encounters.csv"))
+```
+
+```{r Save hospital blocks in file}
+# Keeping only hospital block keys that are included in study cohort
+hospital_block_key <- hospital_block_key |>
+  filter(hospital_block_id  %in% final_cohort$hospital_block_id) |>
+  mutate(hospitalization_id = as.character(hospitalization_id))
+
+# Save the subset of hospital blocks
+write_csv(hospital_block_key, paste0(project_location, "/private_tables/hospital_block_key.csv"))
+```
+
+```{r End time}
+toc()
+```

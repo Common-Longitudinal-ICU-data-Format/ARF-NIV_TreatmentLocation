@@ -1,0 +1,318 @@
+---
+title: "05_ARF_IMC_apply_summary_coeff"
+author: "Sarah Goldfarb"
+date: "2026-01-13"
+output: html_document
+---
+
+# Load the Required Packages, specify local paths
+```{r Load Needed Libraries, include=FALSE}
+packages <- c(
+  "tidyverse",
+  "yaml",
+  "rprojroot"
+)
+
+install_if_missing <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    library(package, character.only = TRUE)
+  }
+}
+
+sapply(packages, install_if_missing)
+rm(packages, install_if_missing)
+
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+
+# Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+outcomes <- config$outcomes
+covariates <- config$covariates
+strata_var <- config$strata_var
+
+rm(config)
+```
+
+# File directory creation if needed
+```{r}
+# Where Hopkins put the GLOBAL model outputs (sent to each site)
+global_dir <- file.path(project_location, "global_model_outputs")
+if (!dir.exists(global_dir)) stop("global_model_outputs folder not found at: ", global_dir)
+
+# Where aggregate outputs will go
+site_out_dir <- file.path(project_location, paste0(site, "_project_output"), "global_model_applied_outputs")
+dir.create(site_out_dir, recursive = TRUE, showWarnings = FALSE)
+
+```
+
+# Helper functions
+```{r}
+# Renames variables to use underscores instead of spaces, slashes, etc.
+outcome_tag <- function(outcome) gsub("[^A-Za-z0-9_]+", "_", outcome)
+```
+
+# Load in and reformat cohort
+```{r}
+
+# Load in cohort
+final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+
+# Reformat function 
+reformat_cohort_cols <- function(df) {
+
+  triage_location_factors     <- c("ICU", "IMC", "Ward")
+  traige_location_imc_factors <- c("ICU (+)", "ICU (-)", "IMC", "Ward (+)", "Ward (-)")
+
+  df |>
+    mutate(
+      triage_location_formatted = case_when(
+        triage_location == "icu"      ~ "ICU",
+        triage_location == "stepdown" ~ "IMC",
+        triage_location == "ward"     ~ "Ward",
+        TRUE ~ triage_location
+      ),
+      triage_location_formatted = factor(triage_location_formatted, levels = triage_location_factors),
+
+      traige_location_imc_avail = case_when(
+        triage_location_formatted == "ICU"  & imc_capable == 1 ~ "ICU (+)",
+        triage_location_formatted == "ICU"                     ~ "ICU (-)",
+        triage_location_formatted == "IMC"                     ~ "IMC",
+        triage_location_formatted == "Ward" & imc_capable == 1 ~ "Ward (+)",
+        triage_location_formatted == "Ward"                    ~ "Ward (-)",
+        TRUE ~ as.character(triage_location_formatted)
+      ),
+      traige_location_imc_avail = factor(traige_location_imc_avail, levels = traige_location_imc_factors),
+
+      
+      is_female = ifelse(tolower(sex_category) == "female", 1, 0),
+
+      
+      death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
+    
+    # Create indicator variable for whether patient was admitted to ICU, stepdown, ward
+    icu_admit = ifelse(triage_location_formatted == "ICU", 1, 0),
+    imc_admit = ifelse(triage_location_formatted == "IMC", 1, 0),
+    ward_admit = ifelse(triage_location_formatted == "Ward", 1, 0),
+    
+    
+    # Binary variable if patient died or discharged to hospice within the given unit level
+    death_hospice_icu = case_when(
+      icu_admit == 1 & death_hospice == 1 ~ 1,
+      icu_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    ),
+    death_hospice_imc = case_when(
+      imc_admit == 1 & death_hospice == 1 ~ 1,
+      imc_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    ),
+    death_hospice_ward = case_when(
+      ward_admit == 1 & death_hospice == 1 ~ 1,
+      ward_admit == 1 & death_hospice == 0 ~ 0,
+      TRUE ~ NA
+    )
+    )
+}
+
+final_cohort <- reformat_cohort_cols(final_cohort)
+```
+
+```{r}
+
+# For each outcome, apply global coefficients
+for (outcome in outcomes) {
+  
+  # Reformat outcome for file reading
+  tag <- outcome_tag(outcome)
+
+  # ------------
+  # Coefficients
+  # ------------
+  
+  # Read global coefficient table, error if table does not exist
+  coef_path <- file.path(global_dir, paste0("global_coefficients_", tag, ".csv"))
+  if (!file.exists(coef_path)) stop("Missing global coefficients: ", coef_path)
+  global_coef <- read_csv(coef_path, show_col_types = FALSE)
+
+  # Expect columns: outcome, term, estimate, std_error
+  if (!all(c("term", "estimate") %in% names(global_coef))) {
+    stop("Global coefficient file missing required columns term/estimate: ", coef_path)
+  }
+
+  # Make named vector of coefficients
+  b_global <- global_coef$estimate
+  names(b_global) <- global_coef$term
+
+  # Ensure intercept exists
+  if (!("(Intercept)" %in% names(b_global))) {
+    stop("Global coefficients missing (Intercept). Cannot compute predictions.")
+  }
+
+  
+  # ------------
+  # Covariates
+  # ------------
+  
+  # Set the expected terms in model, identify any that don't align with expected
+  expected_terms <- c("(Intercept)", covariates)
+  missing_terms <- setdiff(expected_terms, names(b_global))
+  extra_terms   <- setdiff(names(b_global), expected_terms)
+
+  # If expected terms are not the same
+  if (length(missing_terms) > 0) {
+    stop(
+      "Global coefficients do not include expected terms for outcome ",
+      outcome, ": ", paste(missing_terms, collapse = ", "),
+      "\nExpected terms: ", paste(expected_terms, collapse = ", "),
+      "\nFound terms: ", paste(names(b_global), collapse = ", ")
+    )
+  }
+
+  # If there are extra terms, stop to avoid silent mismatch.
+  if (length(extra_terms) > 0) {
+    stop(
+      "Global coefficients include terms not handled by this simple applicator: ",
+      paste(extra_terms, collapse = ", "),
+      "\nThis file currently supports only numeric/binary covariates listed in covariates."
+    )
+  }
+
+  # ---------------------------
+  # Prepare prediction dataset
+  # ---------------------------
+  
+  # Define all of the columns that will be needed for prediction and aggregation
+  # first_hospital_id (needed so we know which hospital for each entry), strata_var (which variable to stratify by; basically the exposure), outcome (the outcome of interest), all covariates
+  needed_cols <- unique(c("first_hospital_id", strata_var, outcome, covariates))
+
+  # Subset dataframe if looking at outcome set to only that cohort
+  if(str_ends(outcome, "_icu")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "ICU")
+    cat("Subsetted to ICU for outcome: ", outcome,"\n")
+  } else if(str_ends(outcome, "_imc")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "IMC")
+    cat("Subsetted to IMC for outcome: ", outcome,"\n")
+  } else if(str_ends(outcome, "_ward")){
+    df <- final_cohort |>
+      filter(triage_location_formatted == "Ward")
+    cat("Subsetted to Ward for outcome: ", outcome,"\n")
+  }
+  else{
+    df <- final_cohort
+    cat("No subset for outcome: ", outcome,"\n")
+  }
+  
+  # Subset cohort to only the columns that are needed for prediction and aggregation
+  df <- df |>
+    select(all_of(needed_cols)) |> # Select needed columns
+    drop_na(all_of(c(outcome, covariates))) # Drop if missing values
+
+  # Safety check, error if too few cases or if outcome is not coded correctly
+  if (nrow(df) < 50) stop("Too few complete-case rows for ", outcome, ": n=", nrow(df))
+  if (!all(df[[outcome]] %in% c(0, 1))) stop("Outcome must be coded 0/1 for ", outcome)
+
+  # ---------------------------
+  # Apply global coefficients to local data
+  # (compute linear predictor (log odds) and predicted probability)
+  # ---------------------------
+  
+  # Initialize the linear predictor (log odds) with the global intercept
+  lp <- b_global["(Intercept)"]
+  
+  # Add each covariate's contribution to the linear predictor
+  for (v in covariates) {
+    lp <- lp + b_global[[v]] * df[[v]] # Multiplying the covariate value by its coeff and add to existing predictor
+  }
+  
+  # Convert log odds to probability
+  # Returns patient's expected/predicted probability of outcome under the global model
+  df$expected_risk <- plogis(lp)
+  # Store the observed outcome (0 or 1) explicityly
+  df$observed      <- df[[outcome]]
+
+  # ---------------------------
+  # Take individual observed vs expected and aggregate by hospital and strata
+  # ---------------------------
+
+  # Helper to aggregate at defined grouping variables
+  aggregate_observed_expected <- function(data, group_vars) {
+    data |>
+      # Group by the grouping variables
+      group_by(across(all_of(group_vars))) |>
+      summarise(
+        n_patients        = n(), 
+        observed_events   = sum(observed, na.rm = TRUE),
+        observed_rate     = mean(observed, na.rm = TRUE),
+        expected_events   = sum(expected_risk, na.rm = TRUE),
+        expected_rate     = mean(expected_risk, na.rm = TRUE),
+        oe_ratio          = ifelse(expected_events > 0, observed_events / expected_events, NA_real_),
+        .groups = "drop"
+      ) |>
+      mutate(
+        site    = site,
+        outcome = outcome
+      ) |>
+      relocate(site, outcome, .before = 1)
+  }
+
+  # (1) Hospital-only
+  agg_hosp <- aggregate_observed_expected(data=df,
+                                          group_vars=c("first_hospital_id"))
+
+  # (2) Hospital + each stratum variable
+  agg_strata <- aggregate_observed_expected(data=df,
+                                          group_vars=c("first_hospital_id", strata_var))
+
+  # ---------------------------
+  # Write outputs
+  # ---------------------------
+  
+  # Observed and expected outcome by hospital only
+  write_csv(
+    agg_hosp,
+    file.path(site_out_dir, paste0(site, "_OE_by_hospital_", tag, ".csv"))
+  )
+
+  # Observed and expected outcome by hospital and strata (exposures)
+  write_csv(
+    agg_strata,
+    file.path(site_out_dir, paste0(site, "_OE_by_hospital_and_strata_", tag, ".csv"))
+  )
+
+  # Quality control summary
+  qc <- tibble(
+    site = site,
+    outcome = outcome,
+    n_complete_case = nrow(df),
+    observed_events = sum(df$observed, na.rm = TRUE),
+    observed_rate = mean(df$observed, na.rm = TRUE),
+    expected_events = sum(df$expected_risk, na.rm = TRUE),
+    expected_rate = mean(df$expected_risk, na.rm = TRUE)
+  )
+  
+  # Save quality control summary
+  write_csv(
+    qc,
+    file.path(site_out_dir, paste0(site, "_QC_expected_risk_", tag, ".csv"))
+  )
+
+  # Output log here
+  cat(
+    "Applied global coefficients for outcome ", outcome,
+    "\n  Saved: ", file.path(site_out_dir, paste0(site, "_OE_by_hospital_", tag, ".csv")),
+    "\n  Saved: ", file.path(site_out_dir, paste0(site, "_OE_by_hospital_and_strata_", tag, ".csv")),
+    "\n\n",
+    sep = ""
+  )
+}
+
+```
