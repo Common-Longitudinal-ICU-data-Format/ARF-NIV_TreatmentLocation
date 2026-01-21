@@ -274,7 +274,7 @@ for (outcome in outcomes){
       n_patients = n(),
       observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
       outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
-      outcome_rate_adjust = mean(!!sym(outcome), na.rm = TRUE)
+      outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
     ) |>
     ungroup() |>
     filter(!is.na(first_hospital_id)) |>
