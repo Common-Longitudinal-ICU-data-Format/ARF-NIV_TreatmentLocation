@@ -255,34 +255,34 @@ for (outcome in outcomes){
   propensity_build_estimates <- model_summary_table(mod)
   propensity_build_covariance <- as.data.frame(vcov(mod))
 
-  #write.csv(propensity_build_estimates, paste0(project_location, '/project_output/', site, '_propensity_build_estimates.csv'))
+  write.csv(propensity_build_estimates, paste0(export_dir, '/local_estimates_', outcome, '.csv'))
 
-  #write.csv(propensity_build_covariance, paste0(project_location, '/project_output/', site, '_propensity_build_covariance.csv'))
+  write.csv(propensity_build_covariance, paste0(export_dir, '/local_covariance_', outcome, '.csv'))
   
   
-  #Extract Dataset from Model
-  df_predicted <- mod$data
-  
-  #Propensity Score Taken from Prediction
-  df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
-  
-  #Each Site Aggregates Data
-  #Create Aggregate Dataset with Observed and Expected Events as well as N
-  df_agg <- df_predicted |>
-    group_by(first_hospital_id, !!sym(outcome)) |>
-    summarise(
-      n_patients = n(),
-      observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
-      outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
-      outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
-    ) |>
-    ungroup() |>
-    filter(!is.na(first_hospital_id)) |>
-    mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
-    mutate(not_outcome=n_patients-observed_outcome)
-
-  #Save CSV
-  write.csv(df_agg, paste0(export_dir, '/local_propensity_', outcome, '.csv'))
+  # #Extract Dataset from Model
+  # df_predicted <- mod$data
+  # 
+  # #Propensity Score Taken from Prediction
+  # df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
+  # 
+  # #Each Site Aggregates Data
+  # #Create Aggregate Dataset with Observed and Expected Events as well as N
+  # df_agg <- df_predicted |>
+  #   group_by(first_hospital_id, !!sym(outcome)) |>
+  #   summarise(
+  #     n_patients = n(),
+  #     observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
+  #     outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
+  #     outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
+  #   ) |>
+  #   ungroup() |>
+  #   filter(!is.na(first_hospital_id)) |>
+  #   mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
+  #   mutate(not_outcome=n_patients-observed_outcome)
+  # 
+  # #Save CSV
+  # write.csv(df_agg, paste0(export_dir, '/local_propensity_', outcome, '.csv'))
 
   # ------------
   # Log complete message
