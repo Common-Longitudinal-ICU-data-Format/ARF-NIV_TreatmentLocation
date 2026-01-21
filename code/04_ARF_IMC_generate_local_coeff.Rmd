@@ -11,7 +11,9 @@ packages <- c(
   "tidyverse",
   "yaml",
   "rprojroot",
-  "stringr"
+  "stringr",
+  "lmtest",
+  "sandwich"
 )
 
 install_if_missing <- function(package) {
@@ -59,7 +61,7 @@ if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_prope
   dir.create(paste0(project_location,"/", site, "_project_output/local_propensities"))
 }
 
-export_dir <- file.path(paste0(project_location, site, "_project_output/local_propensities"))
+export_dir <- file.path(paste0(project_location, "/", site, "_project_output/local_propensities"))
 ```
 
 # Reading in data
