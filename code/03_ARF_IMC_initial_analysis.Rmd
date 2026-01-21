@@ -728,3 +728,20 @@ write.csv(admission_units_by_year,
             row.names = FALSE)
 ```
 
+# Output which hospitals have which types of units
+```{r}
+hospital_data <- final_cohort |>
+  group_by(first_hospital_id) |>
+  summarise(
+    n_patients = n(),
+    imc_capable = first(imc_capable),
+    academic_community = first(first_hospital_type)
+  )
+
+# Output to csv
+write.csv(hospital_data,
+          paste0(
+            project_location,"/", site, "_project_output/", site,"_hospital_data.csv"), 
+            row.names = FALSE)
+```
+
