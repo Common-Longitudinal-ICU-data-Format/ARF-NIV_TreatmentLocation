@@ -717,37 +717,43 @@ cohort_size <- cohort_size |>
 ## Exclusion Criteria: Any continuous pressors in the ED
 ```{r}
 
-# Identify all events where pressors were used in the ED
-pressor_events <- arrow::arrow_table(final_cohort) |>
-  select(hospital_block_id, start_ed, stop_ed) |>
-  inner_join(clif_medication_admin_continuous |>
-              # Select only relevant pressors
-              filter(med_group == "vasoactives") |>
-              # Select only relevant variables
-              select(hospital_block_id, dttm=admin_dttm,
-                     med_category, dose=med_dose, mar_action_name),
-           by = "hospital_block_id")|>
-  # Select only meds from when patient was in the ED
+# Identify all "first" pressor events within a hospital block, no matter the time
+pressor_events <- clif_medication_admin_continuous |>
+  # Only look at vasoactives 
   filter(
-    dttm >= start_ed,
-    dttm <= stop_ed,
+    # Only want vasoactive drugs
+    tolower(med_group) == "vasoactives",
     # Remove cases when stopped
-    tolower(mar_action_name) != "stopped"
-  ) |>
-  # Select only rows with valid (existing, numeric, and positive) values
-  filter(!is.na(dose) & !is.nan(dose) & dose > 0) |>
-  # Select only hospital block IDs
-  select(hospital_block_id) |>
-  # Filter to unique hospital block IDs
-  distinct(hospital_block_id)|>
-  # Load in data
-  collect()
+    tolower(mar_action_name) != "stopped",
+    # Select only rows with valid (existing, numeric, and positive) values
+    !is.na(med_dose) & !is.nan(med_dose) & med_dose > 0
+    )|>
+  # Select only relevant variables
+  select(hospital_block_id, first_vasoactive_time=admin_dttm,
+         first_vasoactive_name=med_category, 
+         first_vasoactive_dose=med_dose, mar_action_name) |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  collect() |>
+  # Order within each hospitalization
+  arrange(hospital_block_id, first_vasoactive_time) |>
+  # Take the first instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice(1) |>
+  ungroup()
 
-# Remove these cases from the final cohort
+# Store the first vasoactive times
 final_cohort <- final_cohort |>
-  anti_join(pressor_events, 
-            by = "hospital_block_id"
+  left_join(
+    pressor_events |>
+      select(hospital_block_id, first_vasoactive_time, first_vasoactive_name, first_vasoactive_dose),
+    by = "hospital_block_id"
   )
+
+# Remove hospital blocks where the patient starts any vasoactive drip before they leave the ED
+final_cohort <- final_cohort |>
+  # If there is no vasoactive time (ie never received vasoactives), column will be NA, so we keep the row
+  filter(coalesce(first_vasoactive_time > stop_ed, TRUE))
 
 # Update cohort size 
 cohort_size <- cohort_size |>
@@ -762,22 +768,32 @@ cohort_size <- cohort_size |>
 ## Exclusion Criteria: Any CRRT in ED
 ```{r}
 
-crrt_events <- arrow::arrow_table(final_cohort) |>
-  select(hospital_block_id, start_ed, stop_ed) |>
-  inner_join(clif_crrt_therapy, by = "hospital_block_id") |>
-  # Select only crrt from when patient was in the ED
-  filter(
-    recorded_dttm >= start_ed,
-    recorded_dttm <= stop_ed
-  ) |>
-  collect()
+# Identify all "first" crrt events within a hospital block, no matter the time
+crrt_events <- clif_crrt_therapy |>
+  # Select only relevant variables
+  select(hospital_block_id, first_crrt_time=recorded_dttm) |>
+  # Only keep entries for hospitalizations we are including
+  semi_join(final_cohort, by = "hospital_block_id") |>
+  collect() |>
+  # Order within each hospitalization
+  arrange(hospital_block_id, first_crrt_time) |>
+  # Take the first instance per hospitalization
+  group_by(hospital_block_id) |>
+  slice(1) |>
+  ungroup()
 
-
-# Remove these cases from the final cohort
+# Store the first crrt time
 final_cohort <- final_cohort |>
-  anti_join(crrt_events, 
-            by = "hospital_block_id"
+  left_join(
+    crrt_events,
+    by = "hospital_block_id"
   )
+
+# Remove hospital blocks where the patient starts crrt before they leave the ED
+final_cohort <- final_cohort |>
+  # If there is no crrt time (ie never received crrt), column will be NA, so we keep the row
+  filter(coalesce(first_crrt_time > stop_ed, TRUE))
+
 
 # Update cohort size 
 cohort_size <- cohort_size |>

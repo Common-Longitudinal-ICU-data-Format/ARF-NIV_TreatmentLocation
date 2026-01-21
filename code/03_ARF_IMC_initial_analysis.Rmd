@@ -1,5 +1,5 @@
 ---
-title: "02_ARF_IMC_initial_analysis"
+title: "03_ARF_IMC_initial_analysis"
 author: "Sarah Goldfarb"
 date: "2026-01-13"
 output: html_document
@@ -286,7 +286,8 @@ create_tab_1 <- function(df, include_imc_avail){
       sf_value,
       pf_value,
       last_fio2,
-      worst_non_resp_sofa
+      worst_non_resp_sofa,
+      sepsis_in_ed
     ) |>
     tbl_summary(
       by = !!strat_var,
@@ -307,7 +308,8 @@ create_tab_1 <- function(df, include_imc_avail){
         sf_value ~ "SF Ratio, mean (SD); median (IQR)",
         pf_value ~ "PF Ratio, mean (SD); median (IQR)",
         last_fio2 ~ "FiO2, mean (SD); median (IQR)",
-        worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)"
+        worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)",
+        sepsis_in_ed ~ "Sepsis in ED, n (%)"
       ),
       missing="ifany"
     ) |>
@@ -372,7 +374,9 @@ create_tab_1 <- function(df, include_imc_avail){
                             summarize_categorical(df, "sex_category", nickname = "sex", by_column=by_column),
                             summarize_categorical(df, "last_niv_device", nickname = "last_niv", by_column=by_column),
                             summarize_categorical(df, "niv_on_admission", nickname = "niv_admiss", by_column=by_column),
-                            summarize_categorical(df, "physiologic_type", nickname = "physiologic_type", by_column=by_column))
+                            summarize_categorical(df, "physiologic_type", nickname = "physiologic_type", by_column=by_column),
+                            summarize_categorical(df, "sepsis_in_ed", nickname = "sepsis_in_ed", by_column=by_column))
+  
   
   
   # Output to csv
@@ -422,7 +426,8 @@ create_tab_2 <- function(df, include_imc_avail){
       los_penalized,
       days_off,
       imv,
-      was_escalated
+      was_escalated,
+      organ_failure_yn
     ) |>
     tbl_summary(
       by = !!strat_var,
@@ -437,7 +442,8 @@ create_tab_2 <- function(df, include_imc_avail){
         los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
         days_off ~ "NIV-free days over the first 28 days from starting NIV, days, mean (SD); median (IQR)",
         imv ~ "Progression to invasive mechanical ventilation, n (%)",
-        was_escalated ~ "Transfer to a higher level of care, n (%)"
+        was_escalated ~ "Transfer to a higher level of care, n (%)",
+        organ_failure_yn ~ "Composite organ failure, n (%)"
         # Add stuff for diagnostic codes and discharge location
       ),
       missing="ifany"
@@ -485,7 +491,8 @@ create_tab_2 <- function(df, include_imc_avail){
                           summarize_categorical(df, "death_hospice_28", nickname = "dh_28", by_column=by_column),
                           summarize_categorical(df, "death_hospice_60", nickname = "dh_60", by_column=by_column),
                           summarize_categorical(df, "imv", nickname = "imv", by_column=by_column),
-                          summarize_categorical(df, "was_escalated", nickname = "was_escalated", by_column=by_column))
+                          summarize_categorical(df, "was_escalated", nickname = "was_escalated", by_column=by_column),
+                          summarize_categorical(df, "organ_failure_yn", nickname = "organ_failure", by_column=by_column))
   # Output continuous to csv
   write.csv(tab_2_catagorical,
             paste0(

@@ -1,5 +1,5 @@
 ---
-title: "01_ARF_IMC_stratification"
+title: "02_ARF_IMC_stratification"
 author: "Sarah Goldfarb"
 date: "2026-01-13"
 output: html_document
@@ -1174,6 +1174,52 @@ final_cohort <- final_cohort |>
 
 ```
 
+# Sepsis indicator while in ED
+```{r}
+
+# Sepsis indicators
+sepsis_indicators <- read_csv(paste0(project_location, "/private_tables/sepsis_indicators.csv"), show_col_types=FALSE) |>
+  # Ensure same data type
+  mutate(hospitalization_id =as.character(hospitalization_id)) |>
+  # Add block ID information
+  left_join(hospital_block_key |>
+              mutate(hospitalization_id =as.character(hospitalization_id))|>
+              select(hospitalization_id, hospital_block_id),
+            by = "hospitalization_id") |>
+  # Select only relevant columns
+  # Note: setting to "sepsis time" as the time of presumed infection
+  select(hospital_block_id, bc_id, sepsis_yn=sepsis, first_sepsis_dttm=presumed_infection_onset_dttm)
+
+# Select the first positive sepsis per block ID
+sepsis_indicators <- sepsis_indicators  |>
+  # Only select flags where there IS sepsis
+  filter(sepsis_yn == 1) |>
+  arrange(hospital_block_id, first_sepsis_dttm) |>
+  group_by(hospital_block_id) |>
+  # Select the first recent row for each 
+  slice_min(
+    order_by = first_sepsis_dttm,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  select(-(bc_id))
+
+  
+# Merge with final cohort, only selecting cases where the sepsis begins in the ED
+final_cohort <- final_cohort |>
+  left_join(sepsis_indicators, by="hospital_block_id") |>
+  mutate(sepsis_in_ed = case_when(
+    # No sepsis in ED if there was never sepsis
+    is.na(sepsis_yn) ~ 0,
+    # No sepsis in ED if the first sepsis is after leaving the ED
+    first_sepsis_dttm > stop_ed ~ 0,
+    TRUE ~ 1
+  )) 
+
+```
+
+
 # Determining time to off respiratory support (i.e., NIV, intubated, etc.)
 ```{r Calculate time to off NIV}
 
@@ -1357,6 +1403,18 @@ final_cohort <- final_cohort |>
 rm(acuity_order, post_triage_adt)
 ```
 
+# Creating composite outcome for intubation, pressor, or crrt
+```{r}
+
+final_cohort <- final_cohort |>
+  mutate(organ_failure_yn = case_when(
+    was_intubated == 1 |
+      !is.na(first_vasoactive_time) == 1 |
+      !is.na(first_crrt_time) == 1 ~ 1,
+    TRUE ~ 0
+  ))
+
+```
 
 # Cleaning data, penalization
 ```{r Creating new columns and cleaning data}
