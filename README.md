@@ -31,14 +31,14 @@ To run this code, you must also be able to run R and Python and have clify insta
 
 1. Rename the `config/config_template.yaml` to `config/config.yaml` with site specific details 
 2. Run the local code files
-    2.1 Run `code/00_ARF_IMC_cohort.Rmd`
-    2.2 To run `code/01_ARF_IMC_sepsis_indicators.py`:
-        2.2.1 Install uv (if not already installed): `curl -LsSf https://astral.sh/uv/install.sh | sh`
-        2.2.2 Sync the Python environment and install dependencies: `uv sync`
-        2.2.3 Run `uv run code/01_ARF_IMC_sepsis_indicators.py`
-    2.3 Run `code/02_ARF_IMC_stratification.Rmd`
-    2.4 Run `code/03_ARF_IMC_initial_analysis.Rmd`
-    2.5 Run `code/04_ARF_IMC_generate_local_coeff.Rmd`
+    2.1. Run `code/00_ARF_IMC_cohort.Rmd`
+    2.2. To run `code/01_ARF_IMC_sepsis_indicators.py`:
+        2.2.1. Install uv (if not already installed): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+        2.2.2. Sync the Python environment and install dependencies: `uv sync`
+        2.2.3. Run `uv run code/01_ARF_IMC_sepsis_indicators.py`
+    2.3. Run `code/02_ARF_IMC_stratification.Rmd`
+    2.4. Run `code/03_ARF_IMC_initial_analysis.Rmd`
+    2.5. Run `code/04_ARF_IMC_generate_local_coeff.Rmd`
 4. Wait for Hopkins to pool the local coefficients to generate global coefficients
 5. Pull from the github repo to update global coefficients
 6. Run the remaining code, starting at `code/06_ARF_IMC_apply_summary_coeff.Rmd`
