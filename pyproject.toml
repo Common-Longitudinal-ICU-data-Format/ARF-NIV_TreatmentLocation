@@ -1,0 +1,57 @@
+# ARF-NIV Treatment Location Analysis - Python Environment
+# =========================================================
+#
+# SETUP INSTRUCTIONS:
+# ------------------
+# 1. Install uv (if not already installed):
+#    curl -LsSf https://astral.sh/uv/install.sh | sh
+#
+# 2. Sync the Python environment and install dependencies:
+#    uv sync
+#
+# 3. Run the Jupyter notebook:
+#    uv run jupyter notebook code/01_ARF_IMC_sepsis_indicators.ipynb
+#
+#    Or to run Jupyter Lab:
+#    uv run jupyter lab
+#
+# 4. Alternative: Start a Jupyter server for all notebooks:
+#    uv run jupyter notebook
+#    (Then navigate to the code/ directory in the browser)
+#
+# ADDITIONAL COMMANDS:
+# -------------------
+# - Add a new package: uv add package-name
+# - Remove a package: uv remove package-name
+# - Update all packages: uv sync --upgrade
+# - Run any Python script: uv run python script.py
+# - Access Python REPL: uv run python
+#
+
+[project]
+name = "arf-niv-treatment-location"
+version = "0.1.0"
+description = "Analysis of ARF-NIV treatment locations and patient outcomes"
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+    "pandas==2.3.2", 
+    "duckdb==1.4.0",
+    "pyarrow==21.0.0",       
+    "clifpy==0.3.8",        
+    "pyyaml>=6.0",          
+    "jupyter",       
+    "ipykernel",     
+    "numpy",        
+]
+
+# Optional: Development dependencies for additional functionality
+[tool.uv]
+dev-dependencies = [
+    "ipywidgets>=8.0.0",    # Interactive widgets for Jupyter
+    "matplotlib>=3.5.0",    # Plotting library (if needed for visualizations)
+    "seaborn>=0.12.0",      # Statistical data visualization
+]
+
+# Note: pathlib is part of Python's standard library (3.4+) and doesn't need to be installed
