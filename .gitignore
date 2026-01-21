@@ -35,3 +35,5 @@ private_tables/
 final_federated_outputs/
 global_model_outputs/
 output/
+config/config.yaml
+.venv

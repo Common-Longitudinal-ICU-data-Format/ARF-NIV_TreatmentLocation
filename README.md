@@ -10,7 +10,7 @@ Acute respiratory failure (ARF) is a common and increasingly prevalent cause of 
 
 ## Required CLIF tables and libraries
 
-Please refer to the online [CLIF data dictionary](https://clif-consortium.github.io/website/data-dictionary.html), [ETL tools](https://github.com/clif-consortium/CLIF/tree/main/etl-to-clif-resources), and [specific table contacts](https://github.com/clif-consortium/CLIF?tab=readme-ov-file#relational-clif) for more information on constructing the required tables and fields.
+Please refer to the online [CLIF data dictionary](https://clif-icu.com/data-dictionary), and [ETL tools](https://clif-icu.com/etl-guide), for more information on constructing the required tables and fields.
 
 The following tables are required:
 1. **`hospitalization`**
@@ -20,12 +20,22 @@ The following tables are required:
 5. **`code_status`**
 6. **`patient`**
 7. **`vitals`**
-8. **labs**
+8. **`labs`**
 9. **`patient_assessments`**
 10. **`hospital_diagnosis`**
 11. **`crrt_therapy`**
 
 To run this code, you must also be able to run R and Python and have clify installed.
+
+## Instructions
+
+1. Rename the `config/config_template.yaml` to `config/config.yaml` with site specific details 
+2. Run `code/01_ARF_IMC_cohort.Rmd`
+3. To run `code/01_ARF_IMC_sepsis_indicators.py`:
+    3.1 Install uv (if not already installed): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+    3.2 Sync the Python environment and install dependencies: `uv sync`
+    3.3 Run `uv run code/01_ARF_IMC_sepsis_indicators.py`
+4. 
 
 ## Expected Results
 In running the code, each site will produce two folders: `private_tables` and `[sitename]_project_output`. `private_tables` is NOT to be shared, as it includes patient row-level data for local analysis. When completed your analysis, please upload `[sitename]_project_output` to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000).

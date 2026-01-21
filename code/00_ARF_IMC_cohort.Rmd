@@ -298,6 +298,7 @@ clif_medication_admin_continuous <- clif_medication_admin_continuous |>
   compute()
 
 clif_crrt_therapy <- clif_crrt_therapy |>
+  select(hospitalization_id, crrt_mode_category, recorded_dttm) |> 
   inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
   compute()
 
