@@ -60,13 +60,18 @@ if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
 if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_propensities"))) {
   dir.create(paste0(project_location,"/", site, "_project_output/local_propensities"))
 }
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/sensitivity_analysis/local_propensities"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/sensitivity_analysis/local_propensities"))
+}
 
-export_dir <- file.path(paste0(project_location, "/", site, "_project_output/local_propensities"))
+export_dir <- file.path(paste0(project_location, "/", site, "_project_output/local_propensities/", site,"_local_"))
+export_dir_no_pandemic <- file.path(paste0(project_location, "/", site, "_project_output/sensitivity_analysis/local_propensities/", site,"_no_pandemic_local_"))
 ```
 
 # Reading in data
 ```{r Read in cohort}
 final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+no_pandemic_cohort <- read_csv(paste0(project_location, "/private_tables/no_pandemic_one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
 
 reformat_cohort_cols <- function(df) {
   
@@ -142,15 +147,18 @@ reformat_cohort_cols <- function(df) {
 }
 
 final_cohort <- reformat_cohort_cols(final_cohort)
+no_pandemic_cohort <- reformat_cohort_cols(no_pandemic_cohort)
 ```
 
 ```{r}
 #Keep Track of the Number of Hospitals
 n_hospitals <- length(unique(final_cohort$first_hospital_id[!is.na(final_cohort$first_hospital_id)]))
+
+n_hospitals_no_pandemic <- length(unique(no_pandemic_cohort$first_hospital_id[!is.na(no_pandemic_cohort$first_hospital_id)]))
 ```
 
 ```{r Function to Summarise Logistic Regression Models}
-model_summary_table <- function(model) {
+model_summary_table <- function(model, n_hospitals) {
  
 #Uses Fixed Effects for Hospital in Sites with > 1 Hospital (and clustered standard errors)  
 if (n_hospitals>1) {
@@ -186,109 +194,122 @@ return(model_table)
 }
 ```
 
-# Fit local risk model and export coef/vcov to prepare for global pooling
+# Fit export coef/vcov to prepare for global pooling
 ```{r}
 # Generate propensity score (do not include triage location or hospital here) for each outcome
-
+generate_coef_vcov <- function(cohort_information, n_hospitals, export_dir){
+  
 # Iterate over each outcome
-for (outcome in outcomes){
+  for (outcome in outcomes){
+    
+    
+    # ------------
+    # Define model and data
+    # ------------
+    
+    # Define model formula
+    model_form <- as.formula(paste0(outcome, " ~ ", paste(covariates, collapse = " + ")))
+    
+    # Define the columns needed to run regression 
+    # Need hospital ID to save propensities
+    needed_cols <- c("first_hospital_id", outcome, covariates)
   
-  # ------------
-  # Define model and data
-  # ------------
+    # Subset dataframe if looking at outcome set to only that cohort
+    if(str_ends(outcome, "_icu")){
+      df <- cohort_information |>
+        dplyr::filter(triage_location_formatted == "ICU")
+      cat("Subsetted to ICU for outcome: ", outcome,"\n")
+    } else if(str_ends(outcome, "_imc")){
+      df <- cohort_information |>
+        dplyr::filter(triage_location_formatted == "IMC")
+      cat("Subsetted to IMC for outcome: ", outcome,"\n")
+    } else if(str_ends(outcome, "_ward")){
+      df <- cohort_information |>
+        dplyr::filter(triage_location_formatted == "Ward")
+      cat("Subsetted to Ward for outcome: ", outcome,"\n")
+    }
+    else{
+      df <- cohort_information
+      cat("No subset for outcome: ", outcome,"\n")
+    }
+    
+    # Selecting only needed columns, requiring all to have data
+    df <- df |>
+      select(dplyr::all_of(needed_cols)) |>
+      drop_na()
+    
+    # Basic safety checks
+    if (nrow(df) < 50){
+      warning("Too few complete-case rows for ", outcome, ": n=", nrow(df))
+      next
+    } 
+    if (!all(df[[outcome]] %in% c(0, 1))) {
+      warning("Outcome must be coded 0/1 for ", outcome)
+      next
+    }
+    if (n_distinct(df[[outcome]]) < 2){
+      warning("Outcome has no variation after filtering for ", outcome)
+      next
+    }
   
-  # Define model formula
-  model_form <- as.formula(paste0(outcome, " ~ ", paste(covariates, collapse = " + ")))
+    # ------------
+    # Fit a local GLM and export coeffs
+    # ------------
+    
+    # Run GLM
+    mod <- glm(model_form,
+               data = df, 
+               family=binomial)
+    
+    #Collect Coefficient and Covariance Matrix for Centralized Creation of Global Coefficient
+    propensity_build_estimates <- model_summary_table(mod, n_hospitals=n_hospitals) |>
+      # Set <5 as NA to ensure patient privacy
+      mutate(n_observations = ifelse(n_observations >= 5, n_observations, NA_integer_))
+    
+    propensity_build_covariance <- as.data.frame(vcov(mod))
   
-  # Define the columns needed to run regression 
-  # Need hospital ID to save propensities
-  needed_cols <- c("first_hospital_id", outcome, covariates)
-
-  # Subset dataframe if looking at outcome set to only that cohort
-  if(str_ends(outcome, "_icu")){
-    df <- final_cohort |>
-      filter(triage_location_formatted == "ICU")
-    cat("Subsetted to ICU for outcome: ", outcome,"\n")
-  } else if(str_ends(outcome, "_imc")){
-    df <- final_cohort |>
-      filter(triage_location_formatted == "IMC")
-    cat("Subsetted to IMC for outcome: ", outcome,"\n")
-  } else if(str_ends(outcome, "_ward")){
-    df <- final_cohort |>
-      filter(triage_location_formatted == "Ward")
-    cat("Subsetted to Ward for outcome: ", outcome,"\n")
+    write.csv(propensity_build_estimates, paste0(export_dir, "estimates_",outcome, '.csv'))
+  
+    write.csv(propensity_build_covariance, paste0(export_dir, "covariances_",outcome, '.csv'))
+    
+    
+    # #Extract Dataset from Model
+    # df_predicted <- mod$data
+    # 
+    # #Propensity Score Taken from Prediction
+    # df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
+    # 
+    # #Each Site Aggregates Data
+    # #Create Aggregate Dataset with Observed and Expected Events as well as N
+    # df_agg <- df_predicted |>
+    #   group_by(first_hospital_id, !!sym(outcome)) |>
+    #   summarise(
+    #     n_patients = n(),
+    #     observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
+    #     outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
+    #     outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
+    #   ) |>
+    #   ungroup() |>
+    #   filter(!is.na(first_hospital_id)) |>
+    #   mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
+    #   mutate(not_outcome=n_patients-observed_outcome)
+    # 
+    # #Save CSV
+    # write.csv(df_agg, paste0(export_dir, outcome, '.csv'))
+  
+    # ------------
+    # Log complete message
+    # ------------
+    cat("Exported local coef/vcov for outcome: ", outcome, "\n\n")
+  
   }
-  else{
-    df <- final_cohort
-    cat("No subset for outcome: ", outcome,"\n")
-  }
-  
-  # Selecting only needed columns, requiring all to have data
-  df <- df |>
-    select(dplyr::all_of(needed_cols)) |>
-    drop_na()
-  
-  # Basic safety checks
-  if (nrow(df) < 50){
-    warning("Too few complete-case rows for ", outcome, ": n=", nrow(df))
-    next
-  } 
-  if (!all(df[[outcome]] %in% c(0, 1))) {
-    warning("Outcome must be coded 0/1 for ", outcome)
-    next
-  }
-  if (n_distinct(df[[outcome]]) < 2){
-    warning("Outcome has no variation after filtering for ", outcome)
-    next
-  }
-
-  # ------------
-  # Fit a local GLM and export coeffs
-  # ------------
-  
-  # Run GLM
-  mod <- glm(model_form,
-             data = df, 
-             family=binomial)
-  
-  #Collect Coefficient and Covariance Matrix for Centralized Creation of Global Coefficient
-  propensity_build_estimates <- model_summary_table(mod)
-  propensity_build_covariance <- as.data.frame(vcov(mod))
-
-  write.csv(propensity_build_estimates, paste0(export_dir, '/local_estimates_', outcome, '.csv'))
-
-  write.csv(propensity_build_covariance, paste0(export_dir, '/local_covariance_', outcome, '.csv'))
-  
-  
-  # #Extract Dataset from Model
-  # df_predicted <- mod$data
-  # 
-  # #Propensity Score Taken from Prediction
-  # df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
-  # 
-  # #Each Site Aggregates Data
-  # #Create Aggregate Dataset with Observed and Expected Events as well as N
-  # df_agg <- df_predicted |>
-  #   group_by(first_hospital_id, !!sym(outcome)) |>
-  #   summarise(
-  #     n_patients = n(),
-  #     observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
-  #     outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
-  #     outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
-  #   ) |>
-  #   ungroup() |>
-  #   filter(!is.na(first_hospital_id)) |>
-  #   mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
-  #   mutate(not_outcome=n_patients-observed_outcome)
-  # 
-  # #Save CSV
-  # write.csv(df_agg, paste0(export_dir, '/local_propensity_', outcome, '.csv'))
-
-  # ------------
-  # Log complete message
-  # ------------
-  cat("Exported local coef/vcov for outcome: ", outcome, "\n\n")
-
 }
+```
+# Run for main cohorts and for no pandemic era cohorts
+```{r}
+generate_coef_vcov(final_cohort, n_hospitals, export_dir)
+```
 
+```{r}
+generate_coef_vcov(no_pandemic_cohort, n_hospitals_no_pandemic, export_dir_no_pandemic)
 ```
