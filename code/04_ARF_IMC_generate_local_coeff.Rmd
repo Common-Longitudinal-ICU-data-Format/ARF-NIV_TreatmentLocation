@@ -55,11 +55,11 @@ if (!dir.exists(paste0(project_location, "/private_tables"))) {
 if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
   dir.create(paste0(project_location,"/", site, "_project_output"))
 }
-if (!dir.exists(paste0(project_location, "/", site, "_project_output/global_model_outputs"))) {
-  dir.create(paste0(project_location,"/", site, "_project_output/global_model_outputs"))
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_propensities"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/local_propensities"))
 }
 
-export_dir <- file.path(paste0(project_location, site, "_project_output/global_model_outputs"))
+export_dir <- file.path(paste0(project_location, site, "_project_output/local_propensities"))
 ```
 
 # Reading in data
@@ -133,12 +133,55 @@ reformat_cohort_cols <- function(df) {
       ward_admit == 1 & death_hospice == 1 ~ 1,
       ward_admit == 1 & death_hospice == 0 ~ 0,
       TRUE ~ NA
-    )
+    ),
+    first_hospital_id = factor(first_hospital_id)
     
   ))
 }
 
 final_cohort <- reformat_cohort_cols(final_cohort)
+```
+
+```{r}
+#Keep Track of the Number of Hospitals
+n_hospitals <- length(unique(final_cohort$first_hospital_id[!is.na(final_cohort$first_hospital_id)]))
+```
+
+```{r Function to Summarise Logistic Regression Models}
+model_summary_table <- function(model) {
+ 
+#Uses Fixed Effects for Hospital in Sites with > 1 Hospital (and clustered standard errors)  
+if (n_hospitals>1) {
+  #Cluster Robust Standard Errors Using LM Test
+  coef_table <- coeftest(model, 
+                         vcovCL(model, cluster = model.frame(model)$hospital_id)) 
+  # Cluster-robust covariance matrix
+  clustered_se <- vcovCL(model, cluster = model.frame(model)$hospital_id)
+  #Compute confidence intervals manually using the clustered SE
+  conf_int <- coefci(model, vcov. = clustered_se)
+}  else {
+  coef_table <- coeftest(model)
+  conf_int <- coefci(model)
+}
+ model_table <- data.frame(
+  'site' = site,
+  'n_observations' = nobs(model),
+  'term' = rownames(coef_table),
+  'estimate' = coef_table[, "Estimate"],
+  'std_error' = coef_table[, "Std. Error"],
+  'p_value' = coef_table[, "Pr(>|z|)"],
+  'odds_ratio' = round(exp(coef_table[, "Estimate"]), 3),  # Exponentiated coefficients as Odds Ratios
+  'lower_bound' = exp(conf_int[, 1]),  # Lower bound of CI from coefci()
+  'upper_bound' = exp(conf_int[, 2])   # Upper bound of CI from coefci()
+)
+model_table <- model_table |>
+  mutate(confidence_interval=paste0(round(lower_bound, 3), ' - ', round(upper_bound, 3))) |>
+  mutate(n_hospitals=n_hospitals) |>
+  relocate(confidence_interval, .before = lower_bound) |>
+  relocate(n_hospitals, .after = n_observations) 
+  rownames(model_table) <- NULL
+return(model_table)
+}
 ```
 
 # Fit local risk model and export coef/vcov to prepare for global pooling
@@ -156,7 +199,8 @@ for (outcome in outcomes){
   model_form <- as.formula(paste0(outcome, " ~ ", paste(covariates, collapse = " + ")))
   
   # Define the columns needed to run regression 
-  needed_cols <- c(outcome, covariates)
+  # Need hospital ID to save propensities
+  needed_cols <- c("first_hospital_id", outcome, covariates)
 
   # Subset dataframe if looking at outcome set to only that cohort
   if(str_ends(outcome, "_icu")){
@@ -196,74 +240,52 @@ for (outcome in outcomes){
     next
   }
 
-  # Define number of complete cases
-  n_cc <- nrow(df)
-  # Define number of events among the complete cases
-  events_cc <- sum(df[[outcome]] == 1, na.rm = TRUE)
-
   # ------------
   # Fit a local GLM and export coeffs
   # ------------
   
   # Run GLM
-  mod <- glm(model_form, data = df, family = binomial())
-
-  # Define coeffs
-  coef_tbl <- tibble(
-    site = site,
-    outcome = outcome,
-    n_complete_case = n_cc,
-    events_complete_case = events_cc,
-    term = names(coef(mod)), # Returns the col titles of intercept and coefficients from model
-    estimate = as.numeric(coef(mod)) # Returns the values of intercept and coefficients from model
-  )
-
-  # Renames variables to use underscores instead of spaces, slashes, etc.
-  outcome_tag <- gsub("[^A-Za-z0-9_]+", "_", outcome)
-
-  # Save
-  write_csv(
-    coef_tbl,
-    file.path(export_dir, paste0(site, "_propensity_build_estimates_", outcome_tag, ".csv"))
-  )
-
-  # ------------
-  # Export wide covariance matrix
-  # ------------
+  mod <- glm(model_form,
+             data = df, 
+             family=binomial)
   
-  # Identify values for covariance matrix (captures how confident the site is about each coefficient)
-  vc <- as.data.frame(vcov(mod))
-  
-  # Preserve term names explicitly
-  vc <- rownames_to_column(vc, "row_term")
-  
-  # Save
-  write_csv(
-    vc,
-    file.path(export_dir, paste0(site, "_propensity_build_covariance_", outcome_tag, ".csv"))
-  )
+  #Collect Coefficient and Covariance Matrix for Centralized Creation of Global Coefficient
+  propensity_build_estimates <- model_summary_table(mod)
+  propensity_build_covariance <- as.data.frame(vcov(mod))
 
-  # ------------
-  # EXTRA: site data for quality control if needed
-  # ------------
-  qc_tbl <- tibble::tibble(
-    site = site, # Site name
-    outcome = outcome, # Outcome name
-    n_complete_case = n_cc, # Total number of complete cases
-    events_complete_case = events_cc, # Total number of events
-    event_rate_complete_case = events_cc / n_cc, # Calculate rate of outcome occurring
-    converged = isTRUE(mod$converged) # Save whether model converges (catch silently failed models)
-  )
+  #write.csv(propensity_build_estimates, paste0(project_location, '/project_output/', site, '_propensity_build_estimates.csv'))
 
-  write_csv(
-    qc_tbl,
-    file.path(export_dir, paste0(site, "_propensity_build_qc_", outcome_tag, ".csv"))
-  )
+  #write.csv(propensity_build_covariance, paste0(project_location, '/project_output/', site, '_propensity_build_covariance.csv'))
+  
+  
+  #Extract Dataset from Model
+  df_predicted <- mod$data
+  
+  #Propensity Score Taken from Prediction
+  df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
+  
+  #Each Site Aggregates Data
+  #Create Aggregate Dataset with Observed and Expected Events as well as N
+  df_agg <- df_predicted |>
+    group_by(first_hospital_id, !!sym(outcome)) |>
+    summarise(
+      n_patients = n(),
+      observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
+      outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
+      outcome_rate_adjust = mean(!!sym(outcome), na.rm = TRUE)
+    ) |>
+    ungroup() |>
+    filter(!is.na(first_hospital_id)) |>
+    mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
+    mutate(not_outcome=n_patients-observed_outcome)
+
+  #Save CSV
+  write.csv(df_agg, paste0(export_dir, '/local_propensity_', outcome, '.csv'))
 
   # ------------
   # Log complete message
   # ------------
-  cat("Exported local coef/vcov/QC for outcome: ", outcome, "\n\n")
+  cat("Exported local coef/vcov for outcome: ", outcome, "\n\n")
 
 }
 
