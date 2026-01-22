@@ -31,16 +31,18 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 if(config$institution != "Hopkins"){
   stop("No need to run this file; you are done with this project!")
 }
 
 project_location <- config$project_location
-outcomes   <- config$outcomes
-strata_var <- config$strata_var
 
-rm(config)
+outcomes   <- global_config$outcomes
+strata_var <- global_config$strata_var
+
+rm(config, global_config)
 
 ```
 
