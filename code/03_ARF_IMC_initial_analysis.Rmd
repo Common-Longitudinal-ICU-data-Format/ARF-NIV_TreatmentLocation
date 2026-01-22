@@ -424,7 +424,7 @@ create_tab_2 <- function(df, include_imc_avail){
       death_hospice_28,
       death_hospice_60,
       los_penalized,
-      days_off,
+      resp_support_free_days,
       imv,
       was_escalated,
       organ_failure_yn
@@ -440,7 +440,7 @@ create_tab_2 <- function(df, include_imc_avail){
         death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
         death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
         los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
-        days_off ~ "NIV-free days over the first 28 days from starting NIV, days, mean (SD); median (IQR)",
+        resp_support_free_days ~ "Respiratory support-free days (from first 28 days), days, mean (SD); median (IQR)",
         imv ~ "Progression to invasive mechanical ventilation, n (%)",
         was_escalated ~ "Transfer to a higher level of care, n (%)",
         organ_failure_yn ~ "Composite organ failure, n (%)"
@@ -479,7 +479,7 @@ create_tab_2 <- function(df, include_imc_avail){
   
   # Create single table for all variables
   tab_2_continuous <- cbind(summarize_continuous(df, "los_penalized", "los", T, by_column=by_column),
-                         summarize_continuous(df, "days_off", "days_off", by_column=by_column))
+                         summarize_continuous(df, "resp_support_free_days", "days_off", by_column=by_column))
   # Output continuous to csv
   write.csv(tab_2_continuous,
             paste0(

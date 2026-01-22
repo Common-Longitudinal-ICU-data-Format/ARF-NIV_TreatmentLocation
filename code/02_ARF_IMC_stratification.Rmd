@@ -1219,73 +1219,6 @@ final_cohort <- final_cohort |>
 
 ```
 
-
-# Determining time to off respiratory support (i.e., NIV, intubated, etc.)
-```{r Calculate time to off NIV}
-
-# Identifying when the last time a patient needed respiratory support within a given hospital block
-last_resp_device <- clif_respiratory_support |>
-  # Only look at entries NOT within "off NIV" group
-  # Aka, looking only at ones that would make you still on respiratory support
-  filter(!tolower(device_category) %in% NIV_FREE_NAMES & !is.na(device_category)) |>
-  # Only keep entries for hospitalization blocks we are including
-  semi_join(final_cohort, by = "hospital_block_id") |>
-  # Add NIV start time for each hospitalization 
-  left_join(final_cohort |>
-              select(hospital_block_id, niv_start), by = "hospital_block_id")|>
-  # Select only events after NIV has started (include initial event if only event)
-  filter(recorded_dttm >= niv_start)|>
-  collect() |>
-  # Order within each hospitalization
-  arrange(hospital_block_id, recorded_dttm) |>
-  # Take the last instance per hospitalization
-  group_by(hospital_block_id) |>
-  slice_tail(n=1) |>
-  ungroup()
-
-# Add the last recorded time for respiratory device (anything more intense than RA or NC) to final cohort
-final_cohort <- final_cohort |>
-  left_join(
-    last_resp_device |>
-      select(hospital_block_id, last_resp_device_time = recorded_dttm),
-    by = "hospital_block_id"
-  )
-  
-
-# Identify all events after the last respiratory device was started in which there is no NIV or more needed
-off_niv_events <- clif_respiratory_support |>
-  # Only look at entries within "off NIV" group
-  filter(tolower(device_category) %in% NIV_FREE_NAMES) |>
-  # Only keep entries for hospitalizations we are including
-  semi_join(final_cohort, by = "hospital_block_id") |>
-  # Add last respiratory device time for each hospitalization 
-  left_join(final_cohort |>
-              select(hospital_block_id, last_resp_device_time), by = "hospital_block_id")|>
-  # Select only events after the last respiratory device was started
-  filter(recorded_dttm > last_resp_device_time) |>
-  collect() |>  
-  # Order within each hospitalization
-  arrange(hospital_block_id, recorded_dttm) |>
-  # Take the first instance per hospitalization
-  group_by(hospital_block_id) |>
-  slice(1) |>
-  ungroup()
-
-final_cohort <- final_cohort |>
-  left_join(
-    off_niv_events |>
-      select(hospital_block_id, niv_stop = recorded_dttm),
-    by = "hospital_block_id"
-  )
-
-# NOTE: this assumes that patients who are discharged when the last charted respiratory device
-# was NIPPV, HFNC, etc. that they go to their discharge location (e.g., home, acute care hospital, etc.)
-# So, these patients will be penalized, similar to death patients
-
-# Clean space
-rm(last_resp_device, off_niv_events)
-```
-
 # Determining number of days off NIV/more invasive in first DAYS_OFF_CUTOFF days from starting NIV
 ```{r Determining number of days off NIV/more invasive in first DAYS_OFF_CUTOFF days from starting NIV}
 
@@ -1303,50 +1236,67 @@ all_resp_events <- clif_respiratory_support |>
       tolower(device_category) %in% NIV_FREE_NAMES ~ 0,
       TRUE ~ 1
     )
-  ) |>
+  )|>
+  select(hospital_block_id, niv_start, recorded_dttm, device_category, on_niv_or_worse) |>
   collect()|>
   mutate(window_end = niv_start + lubridate::days(DAYS_OFF_CUTOFF)) |>
   # Select only events between NIV start and DAYS_OFF_CUTOFF (e.g., 28) days later
   filter(
     recorded_dttm >= niv_start,
     recorded_dttm < window_end
-  ) |>
-  
-  # Calculate amount of time off NIV
+  )
+
+support_free_days <- all_resp_events |>
   arrange(hospital_block_id, recorded_dttm) |>
   group_by(hospital_block_id) |>
-  # Identify how long patient is "NIV free" in first DAYS_OFF_CUTOFF (e.g., 28) days
-  mutate(
-    next_dttm = lead(recorded_dttm),
-    interval_start = recorded_dttm,
-    interval_end = pmin(coalesce(next_dttm, window_end), window_end),
-    interval_hrs = pmax(as.numeric(difftime(interval_end, interval_start, units = "hours")), 0)
-  ) |>
   summarise(
-    niv_free_hours = sum(ifelse(on_niv_or_worse == 0, interval_hrs, 0), na.rm = TRUE),
-    niv_free_days  = niv_free_hours / 24,
+    
+    window_end = first(window_end),
+    
+    # last time the patient was on NIV-or-worse (1); NA if never 1
+    last_resp_support_dttm = if (any(on_niv_or_worse == 1)) max(recorded_dttm[on_niv_or_worse == 1]) else as.POSIXct(NA),
+
+    # earliest time free (0) after the last 1 (terminal 0 start); NA if none
+    resp_support_free_dttm = if (is.na(last_resp_support_dttm)) {
+      if (any(on_niv_or_worse == 0)) min(recorded_dttm[on_niv_or_worse == 0]) else as.POSIXct(NA)
+    } else {
+      x <- recorded_dttm[on_niv_or_worse == 0 & recorded_dttm > last_resp_support_dttm]
+      if (length(x) == 0) as.POSIXct(NA) else min(x)
+    },
+
+    # Calculate number of NIV free days (does NOT penalize for death/hospice yet)
+    resp_support_free_days = if_else(
+      # If there is never a terminal NIV free day
+      is.na(resp_support_free_dttm),
+      0,
+      as.numeric(difftime(window_end, resp_support_free_dttm, units = "days"))
+    ),
+    
     .groups = "drop"
-  )
+  ) |>
+  select(-window_end)
 
 final_cohort <- final_cohort |>
   left_join(
-    all_resp_events |>
-      select(hospital_block_id, days_off = niv_free_days),
+    support_free_days,
     by = "hospital_block_id"
   )
 
+# Penalize for death/hospice
 final_cohort <- final_cohort |>
   mutate(
     # Set in-hospital death as binary
     in_hosp_death = ifelse(tolower(discharge_location) == "expired", 1, 0),
     # Set discharge to hospice as binary
     hospice = ifelse(str_detect(tolower(discharge_location), regex("hospice", ignore_case = TRUE)) , 1, 0),
-    # Length of respiratory support (NIV +- IMV), no penalization
-    days_of_respiratory_support = as.numeric(difftime(niv_stop, niv_start, units="days")),
-    # Calculate the amount of time off of NIV in the first DAYS_OFF_CUTOFF (e.g., 28) days from starting NIV
-    days_off = ifelse(
-      # If patient died or was discharged to hospice in first DAYS_OFF_CUTOFF (e.g., 28) days from starting NIV
-      (in_hosp_death == 1 | hospice) & as.numeric(difftime(block_end_discharge, niv_start, units="days")) < DAYS_OFF_CUTOFF, 0, days_off
+
+    # Penalize to 0 days if patient dies/discharges to hospice before 28 days
+  resp_support_free_days = 
+    ifelse(
+      (in_hosp_death == 1 | hospice == 1) & 
+        as.numeric(difftime(block_end_discharge, niv_start, units="days")) < DAYS_OFF_CUTOFF, 
+      0, 
+      resp_support_free_days
     )
   )
   
@@ -1470,17 +1420,11 @@ final_cohort <- final_cohort |>
     was_escalated = ifelse(is.na(first_escalation_location), 0, 1)
     )
 
-# Calculate LOS and length of NIV +- IMV penalized for death/hospice
+# Calculate LOS penalized for death/hospice
 final_cohort <- final_cohort |>
   mutate(los_penalized = ifelse(in_hosp_death == 1 | hospice == 1, 
                                  quantile(final_cohort$los[final_cohort$in_hosp_death == 0], probs = DEATH_PENALTY, na.rm = T), 
-                                 los),
-         # Note: respiratory support is penalizing for death/hospice but also being discharged on NIV or more
-         days_of_respiratory_support_penalized = ifelse(in_hosp_death == 1 | hospice == 1| is.na(days_of_respiratory_support),
-                                                          quantile(final_cohort$days_of_respiratory_support[final_cohort$in_hosp_death == 0], probs = DEATH_PENALTY, na.rm = T), 
-                                                          days_of_respiratory_support
-           
-         ))
+                                 los))
 
 ```
 
