@@ -28,16 +28,18 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+gobal_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 # Assign config values to R variables
 tables_location <- config$tables_location
 project_location <- config$project_location
 site <- config$institution
-outcomes <- config$outcomes
-covariates <- config$covariates
-strata_var <- config$strata_var
 
-rm(config)
+outcomes <- gobal_config$outcomes
+covariates <- gobal_config$covariates
+strata_var <- gobal_config$strata_var
+
+rm(config, gobal_config)
 ```
 
 # File directory creation if needed
@@ -315,4 +317,32 @@ for (outcome in outcomes) {
   )
 }
 
+```
+
+# From previous code (to be worked on), originally in 04
+```{r}
+
+    # #Extract Dataset from Model
+    # df_predicted <- mod$data
+    # 
+    # #Propensity Score Taken from Prediction
+    # df_predicted$outcome_propensity <- predict(mod, newdata=df_predicted, type = 'response')
+    # 
+    # #Each Site Aggregates Data
+    # #Create Aggregate Dataset with Observed and Expected Events as well as N
+    # df_agg <- df_predicted |>
+    #   group_by(first_hospital_id, !!sym(outcome)) |>
+    #   summarise(
+    #     n_patients = n(),
+    #     observed_outcome = sum(!!sym(outcome), na.rm=TRUE),
+    #     outcome_rate_observed = mean(!!sym(outcome), na.rm=TRUE),
+    #     outcome_rate_adjust = mean(outcome_propensity, na.rm = TRUE)
+    #   ) |>
+    #   ungroup() |>
+    #   filter(!is.na(first_hospital_id)) |>
+    #   mutate(expected_outcome=round((outcome_rate_adjust*n_patients), digits = 0)) |>
+    #   mutate(not_outcome=n_patients-observed_outcome)
+    # 
+    # #Save CSV
+    # write.csv(df_agg, paste0(export_dir, outcome, '.csv'))
 ```

@@ -1,0 +1,36 @@
+# THIS IS SET FOR ALL SITES (DO NOT EDIT BELOW)
+
+# Cutoff for describing hospital as IMC capable, 5%
+imc_capable_cutoff: 0.05
+
+# Study timeframe
+study_start: "2018-01-01"
+study_end: "2024-12-31"
+
+# Definitions of respiratory devices
+niv_devices:
+  - "nippv"
+  - "high flow nc"
+niv_free_devices:
+  - "nasal cannula"
+  - "room air"
+  - "trach collar"
+
+# For regression:
+
+outcomes: 
+  - "death_hospice" # measured outcome
+  - "death_hospice_icu" # subset to ICU only
+  - "death_hospice_imc" # subset to IMC only
+  - "death_hospice_ward" # subset to ward only
+  - "icu_admit" # process outcome
+  - "imc_admit" # process outcome
+  - "ward_admit" # process outcomes
+  
+covariates:
+  - "age_at_admission"
+  - "is_female"
+  
+strata_var:
+  - "triage_location_formatted"
+

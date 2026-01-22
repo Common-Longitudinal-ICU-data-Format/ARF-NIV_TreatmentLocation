@@ -35,6 +35,7 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+gobal_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 # Assign config values to R variables
 tables_location <- config$tables_location
@@ -44,13 +45,13 @@ site_time_zone <- config$time_zone
 file_type <- config$file_type
 
 # Cutoff for describing hospital as IMC capable
-IMC_CAPABLE_CUTOFF <- config$imc_capable_cutoff
+IMC_CAPABLE_CUTOFF <- gobal_config$imc_capable_cutoff
 
 # Study start and end
-STUDY_START <- as.POSIXct(config$study_start, tz=site_time_zone) # Start time
-STUDY_END <- as.POSIXct(config$study_end, tz=site_time_zone) # End time
+STUDY_START <- as.POSIXct(gobal_config$study_start, tz=site_time_zone) # Start time
+STUDY_END <- as.POSIXct(gobal_config$study_end, tz=site_time_zone) # End time
 
-rm(config)
+rm(config, gobal_config)
 ```
 
 # Set global variables
