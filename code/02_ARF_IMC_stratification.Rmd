@@ -52,7 +52,7 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
-gobal_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 # Assign config values to R variables
 tables_location <- config$tables_location
@@ -62,15 +62,15 @@ site_time_zone <- config$time_zone
 file_type <- config$file_type
 
 # Study start and end
-STUDY_START <- as.POSIXct(gobal_config$study_start, tz=site_time_zone) # Start time
-STUDY_END <- as.POSIXct(gobal_config$study_end, tz=site_time_zone) # End time
+STUDY_START <- as.POSIXct(global_config$study_start, tz=site_time_zone) # Start time
+STUDY_END <- as.POSIXct(global_config$study_end, tz=site_time_zone) # End time
 
 # Device names that are included as NIV
-NIV_NAMES <- gobal_config$niv_devices 
+NIV_NAMES <- global_config$niv_devices 
 # Device names that would be considered "off NIV"
-NIV_FREE_NAMES <- gobal_config$niv_free_devices
+NIV_FREE_NAMES <- global_config$niv_free_devices
 
-rm(config, gobal_config)
+rm(config, global_config)
 ```
 
 ```{r Create folders if needed}

@@ -34,7 +34,7 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
-gobal_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 # Assign config values to R variables
 tables_location <- config$tables_location
@@ -42,11 +42,11 @@ project_location <- config$project_location
 site <- config$institution
 site_time_zone <- config$time_zone
 
-file_type <- gobal_config$file_type
-covariates <- gobal_config$covariates
-outcomes <- gobal_config$outcomes
+file_type <- global_config$file_type
+covariates <- global_config$covariates
+outcomes <- global_config$outcomes
 
-rm(config, gobal_config)
+rm(config, global_config)
 ```
 
 # Create folders if needed

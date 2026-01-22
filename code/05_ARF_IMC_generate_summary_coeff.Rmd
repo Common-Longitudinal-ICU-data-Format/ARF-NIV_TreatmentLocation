@@ -28,7 +28,7 @@ project_root <- find_root(rprojroot::has_dir("config"))
 
 # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
-gobal_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 if(config$institution != "Hopkins"){
   stop("proceed to next file")
@@ -36,9 +36,9 @@ if(config$institution != "Hopkins"){
 
 # Assign config values to R variables
 project_location <- config$project_location
-outcomes <- gobal_config$outcomes
+outcomes <- global_config$outcomes
 
-rm(config, gobal_config)
+rm(config, global_config)
 ```
 
 # Define sites, outcomes
