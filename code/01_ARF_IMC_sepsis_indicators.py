@@ -1,7 +1,7 @@
 from pathlib import Path
 import yaml
 import pandas as pd
-
+from clifpy.utils import compute_ase
 # -----------------------------
 # Find project root (directory containing "config/")
 # -----------------------------
@@ -40,8 +40,6 @@ hospitalizations = (
     .drop_duplicates()
     .tolist()
 )
-
-from clifpy.utils import compute_ase
 
 # Compute ASE for specific hospitalizations
 ase_results = compute_ase(
