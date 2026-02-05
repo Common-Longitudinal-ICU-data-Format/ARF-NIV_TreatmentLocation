@@ -10,7 +10,9 @@ output: html_document
 packages <- c(
   "tidyverse",
   "yaml",
-  "rprojroot"
+  "rprojroot",
+  "metafor",
+  "meta"
 )
 
 install_if_missing <- function(package) {
@@ -52,44 +54,91 @@ if (!dir.exists(paste0(project_location, "/global_model_outputs"))) {
   dir.create(paste0(project_location, "/global_model_outputs"))}
 global_out_dir <- file.path(project_location, "global_model_outputs")
 
-# Clean outcome name to match local naming convention
-outcome_tag <- function(outcome) gsub("[^A-Za-z0-9_]+", "_", outcome)
-
 ```
 
 ```{r}
 # Get site folder path
-site_export_dir <- function(site, tab_type, outcome_tag) {
+site_export_dir <- function(site) {
   file.path(paste0(project_location, 
             site, 
-            "_project_output/local_propensities/",
+            "_project_output/",
             site,
-            "_local_",
-            tab_type, "_",
-            outcome_tag, ".csv"))
+            "_model_coefficients.csv"))
 }
 
 ```
 
 ```{r}
 
-# Iterate over each outcome
-for(outcome in outcomes){
-  # Initialize list within an outcome
-  estimate_list = list()
-  cov_list = list()
-  
-  # Iterate over each site
-  for (site in sites){
-    
-    estimate_list[[site]] <- read_csv(site_export_dir(site, "estimates", outcome), show_col_types = FALSE, name_repair = "minimal") |>
-      rename(iteration=1)
-    
-    cov_list[[site]] <- read_csv(site_export_dir(site, "covariances", outcome), show_col_types = FALSE, name_repair = "minimal") |>
-      rename(term=1)
-    
-    
-    # DO WEIGHTING HERE
-  }
+model_coefficients <- data.frame(
+  site = character(),
+  hospital = character(),
+  imc_capable = character(),
+  academic_community = character(),
+  outcome=character(),
+  beta=numeric(),
+  beta_error=numeric(),
+  n_obs=integer(),
+  risk_difference=numeric(),
+  risk_difference_error=numeric(),
+  stringsAsFactors = FALSE
+  # ADD P VALUES
+)
+
+# Iterate over each site, load in model outputs
+for(s in sites){
+  model_coefficients <- model_coefficients |>
+    add_row(
+      read_csv(site_export_dir(site=s), show_col_types=FALSE)
+    )
 }
+```
+
+```{r}
+
+meta_analysis_0 <- rma(
+  data=model_coefficients,
+  yi=beta,
+  sei=beta_error,
+  method="REML"
+)
+
+meta_analysis_0
+
+
+meta_analysis <- rma(
+  data=model_coefficients,
+  yi=beta,
+  sei=beta_error,
+  method="REML",
+  mods= ~ imc_capable + academic_community
+)
+
+meta_analysis
+
+meta_analysis_2 <- rma(
+  data=model_coefficients,
+  yi=risk_difference,
+  sei=risk_difference_error,
+  method="REML",
+  mods= ~ imc_capable + academic_community
+)
+
+summary(meta_analysis_2)
+```
+
+```{r}
+meta1 <- metagen(
+  data=model_coefficients,
+  TE=beta,
+  seTE=beta_error,
+  method.tau="REML",
+  common=F, # Do not want common effect (only want random)
+  random=T, # I want to report random effects
+  sm="OR"#,
+  #mods= ~ imc_capable + academic_community
+)
+
+forest(meta1, layout="JAMA")
+# Find a way to size the points based on n_obs
 ```

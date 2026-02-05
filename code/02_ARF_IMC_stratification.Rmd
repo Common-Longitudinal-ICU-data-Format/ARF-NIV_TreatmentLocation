@@ -628,10 +628,16 @@ rm(most_recent_fio2)
 
 # Return to fio2 values to create ongoing fio2
 fio2_values <- fio2_values |>
-  # Order by time
-  arrange(hospital_block_id, device_category, recorded_dttm) |>
-  # Group by given hospitalization and within a device category (e.g., no carrying through if NC to BiPAP)
-  group_by(hospital_block_id, device_category) |>
+  # Order by time within a given hospital block
+  arrange(hospital_block_id, recorded_dttm) |>
+  group_by(hospital_block_id) |>
+  # Create running variable to keep track of device groupings
+  mutate(device_run = rleid(hospital_block_id, device_category)) |>
+  ungroup() |>
+  # Order by time within a given hospital block
+  arrange(hospital_block_id, recorded_dttm) |>
+  # Group by hospital block and a given device with no devices in beween
+  group_by(hospital_block_id, device_run) |>
   # Carry forward FiO2 within same device (fill NAs with prior value)
   mutate(fio2_set = zoo::na.locf(fio2_set, na.rm = FALSE)) |>
   # Carry backward if first entries missing FiO2 (fill NAs with next value)

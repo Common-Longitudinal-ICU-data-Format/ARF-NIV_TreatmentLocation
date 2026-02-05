@@ -18,18 +18,26 @@ niv_free_devices:
 
 # For regression:
 
-outcomes: 
+outcomes_binary: 
   - "death_hospice" # measured outcome
-  - "death_hospice_icu" # subset to ICU only
-  - "death_hospice_imc" # subset to IMC only
-  - "death_hospice_ward" # subset to ward only
-  - "icu_admit" # process outcome
-  - "imc_admit" # process outcome
-  - "ward_admit" # process outcomes
+  - "organ_failure_yn" # measured outcome
+  
+outcomes_counts: 
+  - "los_ordinal" # measured outcome
+  - "resp_support_free_days" # measured outcome
   
 covariates:
   - "age_at_admission"
   - "is_female"
+  - "first_bmi"
+  - "elixhauser_index"
+  - "code_status_full"
+  - "ph_factor"
+  - "sf_factor"
+  - "worst_non_resp_sofa"
+  - "sepsis_in_ed"
+  - "year"
+  - "season"
   
 strata_var:
   - "triage_location_formatted"

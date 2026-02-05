@@ -13,7 +13,9 @@ packages <- c(
   "rprojroot",
   "stringr",
   "lmtest",
-  "sandwich"
+  "sandwich",
+  "marginaleffects",
+  "ordinal"
 )
 
 install_if_missing <- function(package) {
@@ -44,7 +46,8 @@ site_time_zone <- config$time_zone
 
 file_type <- global_config$file_type
 covariates <- global_config$covariates
-outcomes <- global_config$outcomes
+outcomes_binary <- global_config$outcomes_binary
+outcomes_counts <- global_config$outcomes_counts
 
 rm(config, global_config)
 ```
@@ -59,15 +62,6 @@ if (!dir.exists(paste0(project_location, "/private_tables"))) {
 if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
   dir.create(paste0(project_location,"/", site, "_project_output"))
 }
-if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_propensities"))) {
-  dir.create(paste0(project_location,"/", site, "_project_output/local_propensities"))
-}
-if (!dir.exists(paste0(project_location, "/", site, "_project_output/sensitivity_analysis/local_propensities"))) {
-  dir.create(paste0(project_location,"/", site, "_project_output/sensitivity_analysis/local_propensities"))
-}
-
-export_dir <- file.path(paste0(project_location, "/", site, "_project_output/local_propensities/", site,"_local_"))
-export_dir_no_pandemic <- file.path(paste0(project_location, "/", site, "_project_output/sensitivity_analysis/local_propensities/", site,"_no_pandemic_local_"))
 ```
 
 # Reading in data
@@ -103,12 +97,9 @@ reformat_cohort_cols <- function(df) {
     ),
     # Set triage  as factor
     traige_location_imc_avail = factor(traige_location_imc_avail, levels = traige_location_imc_factors),
-    # Factor race
-    race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
     # Factor last NIV device
     last_niv_device = factor(last_niv_device, levels=c("NIPPV", "High Flow NC")),
-    # Factor type of ARF
-    physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+    
     # Create binary variable if patient is female
     is_female = ifelse(tolower(sex_category) == "female", 1, 0),
     
@@ -118,32 +109,40 @@ reformat_cohort_cols <- function(df) {
     # Binary variable if patient died or discharged to hospice at all
     death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
     
-    # Create log10 scale for relevant variables
-    los_pen_logged = log10(los_penalized),
+    first_hospital_id = factor(first_hospital_id),
     
-    # Create indicator variable for whether patient was admitted to ICU, stepdown, ward
-    icu_admit = ifelse(triage_location_formatted == "ICU", 1, 0),
-    imc_admit = ifelse(triage_location_formatted == "IMC", 1, 0),
-    ward_admit = ifelse(triage_location_formatted == "Ward", 1, 0),
+    # Set code status as full/presumed full vs other
+    code_status_full = case_when(
+      is.na(code_status_category) ~ 1, # Presume full if no code status charted
+      str_detect(tolower(code_status_category), "full") ~ 1,
+      TRUE ~ 0),
     
+    # Make year a factor
+    year = as.factor(year),
     
-    # Binary variable if patient died or discharged to hospice within the given unit level
-    death_hospice_icu = case_when(
-      icu_admit == 1 & death_hospice == 1 ~ 1,
-      icu_admit == 1 & death_hospice == 0 ~ 0,
-      TRUE ~ NA
+    # Set cutoffs for SF
+    sf_factor = factor(
+      case_when(
+        is.na(sf_value) ~ "Not present",
+        sf_value > 250 ~ "> 250",
+        sf_value > 200 ~ "> 200",
+        sf_value > 150 ~ "> 150",
+        TRUE ~ "<= 150"
+      ),
+      levels=c("Not present", "> 250", "> 200","> 150", "<= 150")
     ),
-    death_hospice_imc = case_when(
-      imc_admit == 1 & death_hospice == 1 ~ 1,
-      imc_admit == 1 & death_hospice == 0 ~ 0,
-      TRUE ~ NA
-    ),
-    death_hospice_ward = case_when(
-      ward_admit == 1 & death_hospice == 1 ~ 1,
-      ward_admit == 1 & death_hospice == 0 ~ 0,
-      TRUE ~ NA
-    ),
-    first_hospital_id = factor(first_hospital_id)
+    
+    # Set cutoffs for pH
+    ph_factor = factor(
+      case_when(
+        is.na(ph_value) ~ "Not present",
+        ph_value > 7.35 ~ "> 7.35",
+        ph_value > 7.25 ~ "> 7.25",
+        ph_value > 7.15 ~ "> 7.15",
+        TRUE ~ "<= 7.15"
+      ),
+      levels=c("Not present", "> 7.35", "> 7.25", "> 7.15", "<= 7.15")
+    )
     
   ))
 }
@@ -153,140 +152,232 @@ no_pandemic_cohort <- reformat_cohort_cols(no_pandemic_cohort)
 ```
 
 ```{r}
-#Keep Track of the Number of Hospitals
-n_hospitals <- length(unique(final_cohort$first_hospital_id[!is.na(final_cohort$first_hospital_id)]))
+# Keep track of hospital information
+hospital_data <- read_csv(paste0(project_location,"/", site, "_project_output/", site,"_hospital_data.csv"), show_col_types=FALSE)
 
-n_hospitals_no_pandemic <- length(unique(no_pandemic_cohort$first_hospital_id[!is.na(no_pandemic_cohort$first_hospital_id)]))
+no_pandemic_hospital_data <- read_csv(paste0(project_location,"/", site, "_project_output/sensitivity_analysis/", site,"_no_covid_hospital_data.csv"), show_col_types=FALSE)
 ```
 
-```{r Function to Summarise Logistic Regression Models}
-model_summary_table <- function(model, n_hospitals) {
- 
-#Uses Fixed Effects for Hospital in Sites with > 1 Hospital (and clustered standard errors)  
-if (n_hospitals>1) {
-  #Cluster Robust Standard Errors Using LM Test
-  coef_table <- coeftest(model, 
-                         vcovCL(model, cluster = model.frame(model)$hospital_id)) 
-  # Cluster-robust covariance matrix
-  clustered_se <- vcovCL(model, cluster = model.frame(model)$hospital_id)
-  #Compute confidence intervals manually using the clustered SE
-  conf_int <- coefci(model, vcov. = clustered_se)
-}  else {
-  coef_table <- coeftest(model)
-  conf_int <- coefci(model)
-}
- model_table <- data.frame(
-  'site' = site,
-  'n_observations' = nobs(model),
-  'term' = rownames(coef_table),
-  'estimate' = coef_table[, "Estimate"],
-  'std_error' = coef_table[, "Std. Error"],
-  'p_value' = coef_table[, "Pr(>|z|)"],
-  'odds_ratio' = round(exp(coef_table[, "Estimate"]), 3),  # Exponentiated coefficients as Odds Ratios
-  'lower_bound' = exp(conf_int[, 1]),  # Lower bound of CI from coefci()
-  'upper_bound' = exp(conf_int[, 2])   # Upper bound of CI from coefci()
-)
-model_table <- model_table |>
-  mutate(confidence_interval=paste0(round(lower_bound, 3), ' - ', round(upper_bound, 3))) |>
-  mutate(n_hospitals=n_hospitals) |>
-  relocate(confidence_interval, .before = lower_bound) |>
-  relocate(n_hospitals, .after = n_observations) 
-  rownames(model_table) <- NULL
-return(model_table)
-}
-```
-
-# Fit export coef/vcov to prepare for global pooling
 ```{r}
-# Generate propensity score (do not include triage location or hospital here) for each outcome
-generate_coef_vcov <- function(cohort_information, n_hospitals, export_dir){
+
+run_logit_models <- function(cohort_data, hosp_data){
+
+  # Remove IMC patients and add indicator if admitted to ICU
+  all_model_data <- cohort_data |> 
+    filter(triage_location %in% c("icu", "ward")) |>
+    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0))
   
-# Iterate over each outcome
-  for (outcome in outcomes){
-    
-    
-    # ------------
-    # Define model and data
-    # ------------
-    
-    # Define model formula
-    model_form <- as.formula(paste0(outcome, " ~ ", paste(covariates, collapse = " + ")))
-    
-    # Define the columns needed to run regression 
-    # Need hospital ID to save propensities
-    needed_cols <- c("first_hospital_id", outcome, covariates)
+    # Initialize the model coefficients dataframe
+    model_coefficients <- data.frame(
+      site = character(),
+      hospital = character(),
+      imc_capable = numeric(),
+      academic_community = character(),
+      outcome=character(),
+      beta=numeric(),
+      beta_error=numeric(),
+      n_obs=integer(),
+      p_value=numeric(),
+      risk_difference=numeric(),
+      risk_difference_error=numeric(),
+      risk_difference_p=numeric(),
+      stringsAsFactors = FALSE
+    )
   
-    # Subset dataframe if looking at outcome set to only that cohort
-    if(str_ends(outcome, "_icu")){
-      df <- cohort_information |>
-        dplyr::filter(triage_location_formatted == "ICU")
-      cat("Subsetted to ICU for outcome: ", outcome,"\n")
-    } else if(str_ends(outcome, "_imc")){
-      df <- cohort_information |>
-        dplyr::filter(triage_location_formatted == "IMC")
-      cat("Subsetted to IMC for outcome: ", outcome,"\n")
-    } else if(str_ends(outcome, "_ward")){
-      df <- cohort_information |>
-        dplyr::filter(triage_location_formatted == "Ward")
-      cat("Subsetted to Ward for outcome: ", outcome,"\n")
+  # Iterate over each binary outcome of interest
+  for(outcome in outcomes_binary){
+    model_equation <- paste0(outcome, " ~ icu_admission + ", paste(covariates, collapse = " + "))
+    cat("\n---------------------\n")
+    cat("Cohort: ", deparse(substitute(cohort_data)), "\n")
+    cat(paste0("Running models using equation:\n", model_equation, "\n\n"))
+    
+    # Iterate over each hospital at this local site
+    for(i in seq_len(nrow(hosp_data))){
+      cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n   "))
+      
+      # Only select rows at the given hospital
+      model_data <- all_model_data |> 
+        filter(first_hospital_id == hosp_data$first_hospital_id[i])
+
+      # Run logistic regression
+      model_1 <- glm(
+        model_equation,
+        data=model_data,
+        family=binomial
+        )
+      
+      # Marginal effects
+      marginal_effects <- avg_slopes(
+        model=model_1,
+        newdata = datagrid(
+          model=model_1,
+          grid_type="counterfactual",
+          icu_admission=c(0,1),
+          variables="icu_admission"
+          )
+        ) |>
+        filter(term=="icu_admission")
+      
+      model_coefficients <- model_coefficients |>
+        add_row(
+          site = site,
+          hospital = hosp_data$first_hospital_id[i],
+          imc_capable = hosp_data$imc_capable[i],
+          academic_community = hosp_data$academic_community[i],
+          outcome=outcome,
+          beta=coeftest(model_1)["icu_admission","Estimate"],
+          beta_error=coeftest(model_1)["icu_admission","Std. Error"],
+          n_obs=nobs(model_1),
+          p_value=coeftest(model_1)["icu_admission","Pr(>|z|)"],
+          risk_difference=marginal_effects$estimate,
+          risk_difference_error=marginal_effects$std.error,
+          risk_difference_p=marginal_effects$p.value
+        )
+      
+      cat(paste0(" Complete!\n"))
     }
-    else{
-      df <- cohort_information
-      cat("No subset for outcome: ", outcome,"\n")
-    }
-    
-    # Selecting only needed columns, requiring all to have data
-    df <- df |>
-      select(dplyr::all_of(needed_cols)) |>
-      drop_na()
-    
-    # Basic safety checks
-    if (nrow(df) < 50){
-      warning("Too few complete-case rows for ", outcome, ": n=", nrow(df))
-      next
-    } 
-    if (!all(df[[outcome]] %in% c(0, 1))) {
-      warning("Outcome must be coded 0/1 for ", outcome)
-      next
-    }
-    if (n_distinct(df[[outcome]]) < 2){
-      warning("Outcome has no variation after filtering for ", outcome)
-      next
-    }
-  
-    # ------------
-    # Fit a local GLM and export coeffs
-    # ------------
-    
-    # Run GLM
-    mod <- glm(model_form,
-               data = df, 
-               family=binomial)
-    
-    #Collect Coefficient and Covariance Matrix for Centralized Creation of Global Coefficient
-    propensity_build_estimates <- model_summary_table(mod, n_hospitals=n_hospitals) |>
-      # Set <5 as NA to ensure patient privacy
-      mutate(n_observations = ifelse(n_observations >= 5, n_observations, NA_integer_))
-    
-    propensity_build_covariance <- as.data.frame(vcov(mod))
-  
-    write.csv(propensity_build_estimates, paste0(export_dir, "estimates_",outcome, '.csv'))
-  
-    write.csv(propensity_build_covariance, paste0(export_dir, "covariances_",outcome, '.csv'))
-  
-    # ------------
-    # Log complete message
-    # ------------
-    cat("Exported local coef/vcov for outcome: ", outcome, "\n\n")
-  
   }
+  return(model_coefficients)
 }
-```
-# Run for main cohorts and for no pandemic era cohorts
-```{r}
-generate_coef_vcov(final_cohort, n_hospitals, export_dir)
+
+
 ```
 
 ```{r}
-generate_coef_vcov(no_pandemic_cohort, n_hospitals_no_pandemic, export_dir_no_pandemic)
+model_coefficients <- run_logit_models(final_cohort, hospital_data)
+no_pandemic_model_coefficients <- run_logit_models(no_pandemic_cohort, no_pandemic_hospital_data)
+```
+
+```{r}
+write_csv(model_coefficients, file.path(paste0(project_location, "/", site,"_project_output/"), paste0(site,"_model_coefficients.csv")))
+write_csv(no_pandemic_model_coefficients, file.path(paste0(project_location, "/", site,"_project_output/sensitivity_analysis/"), paste0(site,"_no_covid_model_coefficients.csv")))
+```
+
+```{r}
+run_prop_odds_models <- function(cohort_data, hosp_data){
+  
+  # Remove IMC patients and add indicator if admitted to ICU
+  all_model_data <- cohort_data |> 
+    filter(triage_location %in% c("icu", "ward")) 
+  
+  # Set the cutoff for length of stay
+  max_days_los <- ceiling(max(all_model_data$los_penalized))
+  
+  # Create outcome variables
+  all_model_data <- all_model_data |>
+    mutate(resp_support_free_days = factor(floor(resp_support_free_days),
+                                           levels=as.character(0:28),
+                                           ordered=TRUE),
+           
+           los_ordinal = cut(
+             los_penalized,
+             breaks = c(seq(-0.5, max_days_los + 0.5, by = 1)),
+             labels = c(as.character(0:max_days_los)),
+             right = TRUE,
+             ordered_result = TRUE
+    )
+
+           ) |>
+    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0))
+  
+    # Initialize the model coefficients dataframe
+    model_coefficients <- data.frame(
+      site = character(),
+      hospital = character(),
+      imc_capable = numeric(),
+      academic_community = character(),
+      outcome=character(),
+      beta=numeric(),
+      beta_error=numeric(),
+      n_obs=integer(),
+      p_value=numeric(),
+      # May need to add some stuff for marginal effects here
+      stringsAsFactors = FALSE
+    )
+    
+    # Iterate over each count outcome
+    for(outcome in outcomes_counts){
+      
+      model_equation <- paste0(outcome, " ~ icu_admission + ", paste(covariates, collapse = " + "))
+      
+      cat("\n---------------------\n")
+      cat("Cohort: ", deparse(substitute(cohort_data)), "\n")
+      cat(paste0("Running models using equation:\n", model_equation, "\n\n"))
+      
+      # Iterate over each hospital at this local site
+      for(i in seq_len(nrow(hosp_data))){
+        cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n   "))
+        
+        # Only select rows at the given hospital
+        model_data <- all_model_data |> 
+          filter(first_hospital_id == hosp_data$first_hospital_id[i])
+        
+        # Run culmulative logistic regression
+        model_2 <- clm(
+          model_equation,
+          data=model_data,
+          link="logit"
+          )
+        
+        model_coefficients <- model_coefficients |>
+          add_row(
+            site = site,
+            hospital = hosp_data$first_hospital_id[i],
+            imc_capable = hosp_data$imc_capable[i],
+            academic_community = hosp_data$academic_community[i],
+            outcome=outcome,
+            beta=coeftest(model_2)["icu_admission","Estimate"],
+            beta_error=coeftest(model_2)["icu_admission","Std. Error"],
+            n_obs=nobs(model_2),
+            p_value=coeftest(model_2)["icu_admission","Pr(>|t|)"]
+            # May need to add some stuff for marginal effects here
+        )
+        
+        
+        cat(paste0(" Complete!\n"))
+      }
+    }
+  return(model_coefficients)
+}
+```
+
+```{r}
+model_coefficients_prop_odds <-run_prop_odds_models(final_cohort, hospital_data)
+no_pandemic_model_coefficients_prop_odds <-run_prop_odds_models(no_pandemic_cohort, no_pandemic_hospital_data)
+```
+
+```{r}
+write_csv(model_coefficients_prop_odds, file.path(paste0(project_location, "/", site,"_project_output/"), paste0(site,"_model_coefficients_prop_odds.csv")))
+write_csv(no_pandemic_model_coefficients_prop_odds, file.path(paste0(project_location, "/", site,"_project_output/sensitivity_analysis/"), paste0(site,"_no_covid_model_coefficients_prop_odds.csv")))
+```
+
+# OLD, includes marginal effects for counting outcomes
+```{r}
+# # Proportional odds for continuous/count variables
+# model_data_2 <- final_cohort |> 
+#   filter(triage_location %in% c("icu", "ward")) |>
+#   mutate(resp_support_free_days = factor(floor(resp_support_free_days),
+#                                          levels=as.character(0:28),
+#                                          ordered=TRUE)) |>
+#   mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0))
+# 
+# model_2 <- clm(
+#   resp_support_free_days ~ icu_admission + age_at_admission + is_female,
+#   data=model_data_2,
+#   link="logit"
+# )
+# 
+# p_2 <- avg_predictions(model_2, by="icu_admission")
+# 
+# p_3 <- avg_predictions(model_2, 
+#                        newdata=datagrid(
+#                          model=model_2,
+#                           grid_type="counterfactual",
+#                           icu_admission=c(0,1),
+#                           variables="icu_admission"
+#                        ),
+#                        by="icu_admission")
+# 
+# summary(model_2)
+
 ```

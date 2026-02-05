@@ -78,6 +78,7 @@ if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
 # Reading in data
 ```{r Read in cohort}
 final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+no_pandemic_cohort <- read_csv(paste0(project_location, "/private_tables/no_pandemic_one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
 ```
 
 # Reformat variables for table display
@@ -158,6 +159,7 @@ reformat_cohort_cols <- function(df) {
 }
 
 final_cohort <- reformat_cohort_cols(final_cohort)
+no_pandemic_cohort <- reformat_cohort_cols(no_pandemic_cohort)
 ```
 
 ```{r set icd diagnosis}
@@ -744,5 +746,19 @@ write.csv(hospital_data,
           paste0(
             project_location,"/", site, "_project_output/", site,"_hospital_data.csv"), 
             row.names = FALSE)
+
+# Output to csv
+write.csv(no_pandemic_cohort |>
+            group_by(first_hospital_id) |>
+            summarise(
+              n_patients = n(),
+              imc_capable = first(imc_capable),
+              academic_community = first(first_hospital_type)
+              ),
+          paste0(
+            project_location,"/", site, "_project_output/sensitivity_analysis/", site,"_no_covid_hospital_data.csv"), 
+            row.names = FALSE)
+
+
 ```
 
