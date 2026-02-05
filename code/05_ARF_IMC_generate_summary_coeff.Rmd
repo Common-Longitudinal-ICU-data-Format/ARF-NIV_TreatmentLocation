@@ -33,7 +33,7 @@ config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
 global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
 
 if(config$institution != "Hopkins"){
-  stop("proceed to next file")
+  stop("you have completed running all of the files!")
 }
 
 # Assign config values to R variables
