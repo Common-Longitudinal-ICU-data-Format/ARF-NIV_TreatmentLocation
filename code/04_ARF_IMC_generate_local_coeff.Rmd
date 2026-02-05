@@ -352,7 +352,7 @@ run_prop_odds_models <- function(cohort_data, hosp_data){
         }
         write_csv(marginal_effects, paste0(model_out_dir, site, 
                                            prefix_name, "_",outcome,
-                                           "_prop_odds_model_coefficients.csv"))
+                                           "_marginal_effects.csv"))
         
         cat(paste0(" Complete!\n"))
       }
@@ -368,8 +368,13 @@ no_pandemic_model_coefficients_prop_odds <-run_prop_odds_models(no_pandemic_coho
 ```
 
 ```{r}
-write_csv(model_coefficients_prop_odds, file.path(paste0(project_location, "/", site,"_project_output/"), paste0(site,"_model_coefficients_prop_odds.csv")))
-write_csv(no_pandemic_model_coefficients_prop_odds, file.path(paste0(project_location, "/", site,"_project_output/sensitivity_analysis/"), paste0(site,"_no_covid_model_coefficients_prop_odds.csv")))
+write_csv(model_coefficients_prop_odds, paste0(model_out_dir,
+                                               site,
+                                               "_prop_odds_model_coefficients.csv"))
+
+write_csv(no_pandemic_model_coefficients_prop_odds, paste0(model_out_dir, 
+                                                        site,
+                                                        "_no_covid_prop_odds_model_coefficients.csv"))
 ```
 
 # OLD, includes marginal effects for counting outcomes
