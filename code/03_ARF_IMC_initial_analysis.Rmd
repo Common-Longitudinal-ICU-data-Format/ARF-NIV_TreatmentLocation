@@ -73,6 +73,13 @@ if (!dir.exists(paste0(project_location, "/private_tables"))) {
 if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
   dir.create(paste0(project_location,"/", site, "_project_output"))
 }
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_figs_tabs/"))) {
+  dir.create(paste0(project_location,"/", site, "_project_output/local_figs_tabs/"))
+}
+
+# Where to send local figures and tables for viewing locally but not necessary for pooling
+local_fig_dir <- file.path(project_location, paste0(site, "_project_output/local_figs_tabs/"))
+
 ```
 
 # Reading in data
@@ -351,7 +358,7 @@ create_tab_1 <- function(df, include_imc_avail){
   # Save as a viewable HTML
   tab_1 |>
     as_gt() |>
-    gtsave(paste0(project_location,"/", site, "_project_output/", site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    gtsave(paste0(local_fig_dir, site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
   
   
   ### Save as CSVs ###
@@ -475,7 +482,7 @@ create_tab_2 <- function(df, include_imc_avail){
   # Save as a viewable HTML
   tab_2 |>
     as_gt() |>
-    gtsave(paste0(project_location,"/", site, "_project_output/", site, "_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    gtsave(paste0(local_fig_dir, site, "_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
   
   
   ### Save as CSVs ###
@@ -541,7 +548,7 @@ hosp_info_tab
 # Output to csv
 write.csv(hosp_info_tab,
           paste0(
-            project_location,"/", site, "_project_output/", site, "fig_1a_data.csv"), 
+            project_location,"/", site, "_project_output/", site, "_fig_1a_data.csv"), 
             row.names = FALSE)
 
 
@@ -584,7 +591,7 @@ hosp_info_plot <- ggplot(hosp_info_tab_long, aes(x = factor(hospital, levels = u
 hosp_info_plot
 
 ### Save as jpg to view ###
-ggsave(paste0(project_location,"/", site, "_project_output/", site,"_fig_1a.jpg"), 
+ggsave(paste0(local_fig_dir, site,"_fig_1a.jpg"), 
        plot=hosp_info_plot, width=6, height=5, dpi=300)
 ```
 
@@ -609,7 +616,6 @@ plot_temporal_panels <- function(
   plot_width = 8,
   plot_height = 6,
   dpi = 300,
-  save_path = project_location,
   site_name = site,
   file_prefix = "fig_2"
 ) {
@@ -651,31 +657,14 @@ plot_temporal_panels <- function(
     )
 
   
-  # Make sure the path and file name are sent in
-  if (!is.null(save_path) & !is.null(site_name)) {
     # Save the image of the plot
     ggsave(
-      filename = paste0(save_path, "/", site_name, "_project_output/", site_name, "_" ,file_prefix, panel_num, "_.jpg"),
+      filename = paste0(local_fig_dir, site_name, "_" ,file_prefix, panel_num, "_.jpg"),
       plot = p,
       width = plot_width,
       height = plot_height,
       dpi = dpi
     )
-    
-    # Save the data
-    figE1_data <- ggplot_build(p)$data[[1]]
-    # Map numeric groups to factor levels
-    figE1_data[[fill_column]] <- levels(data[[fill_column]])[figE1_data$group]
-    # Keep actual fill color
-    figE1_data$fill_color <- figE1_data$fill
-    
-    # Save as csv    
-    write.csv(
-      figE1_data,
-      paste0(save_path, "/", site_name, "_project_output/", site_name, "_" , file_prefix, panel_num, "_data.csv"),
-      row.names = FALSE
-    )
-  }
   
   return(p)
 }
@@ -709,26 +698,168 @@ plot_temporal_panels(
 )
 ```
 
-# Output temporal by year
 ```{r}
-admission_units_by_year <- rownames_to_column(as.data.frame.matrix(table(final_cohort |>
-  select(year, triage_location_formatted))),
-  "year") |>
+
+save_temporal_data <- function(
+  data,
+  breaks,
+  fill_column,
+  panel_num,
+  site_name = site,
+  file_prefix = "fig_2"
+) {
+  
+  display_results <- data |>
+    select(start_ed, !!sym(fill_column)) |>
+    mutate(
+      time_bin = cut(
+        start_ed,
+        breaks = breaks,
+        include.lowest = TRUE,
+        right = FALSE,        # intervals like [a, b)
+        ordered_result = TRUE
+      )
+    ) |>
+    select(time_bin, !!sym(fill_column))
+  
+    fig_data <- data.frame(table(display_results)) |>
+      arrange(time_bin, !!sym(fill_column)) |>
+      rename(n_patients=Freq) |>
+      # Set to < 5 if fewer than 5 patients for privacy
+      mutate(n_patients = case_when(
+        n_patients == 0 ~ "0",
+        n_patients < 5 ~ "< 5",
+        TRUE ~ as.character(n_patients)
+      ))
+    
+    write.csv(fig_data, paste0(
+      project_location, "/", site, "_project_output/", site, "_", file_prefix, panel_num,"_data.csv"
+    ))
+  
+}
+```
+
+```{r}
+
+# Build 1-month breakpoints
+breaks <- seq(STUDY_START, STUDY_END, by = "1 month")
+
+# Ensure STUDY_END is included
+if (tail(breaks, 1) < STUDY_END) {
+  breaks <- c(breaks, STUDY_END)
+}
+
+# Save the data for all fig2 panels
+
+save_temporal_data(
+  final_cohort,
+  breaks,
+  "triage_location_formatted",
+  "a"
+)
+
+save_temporal_data(
+  final_cohort,
+  breaks,
+  "last_niv_device",
+  "b"
+)
+
+save_temporal_data(
+  final_cohort,
+  breaks,
+  "physiologic_type",
+  "c"
+)
+
+# ggplot(display_data, aes(x = time_bin, y = n_patients, fill = triage_location_formatted)) +
+#   geom_col(width = 1) +
+#   theme_minimal()
+```
+
+# Histograms of day count variables
+```{r}
+
+MAX_LOS_BIN <- 60
+
+histogram_data <- final_cohort |>
+  select(resp_support_free_days, 
+         los_penalized) |>
   mutate(
-    n_total = ICU + IMC + Ward,
-    pct_ICU = ICU/n_total,
-    pct_IMC = IMC/n_total,
-    pct_Ward = Ward/n_total,
-    pct_nonICU = 1 - pct_ICU
+    
+    los_groups = cut(
+      los_penalized,
+      breaks = c(seq(0, MAX_LOS_BIN, by = 5), Inf),
+      right = TRUE,
+      ordered_result = TRUE
+    ),
+    resp_free_days_groups = floor(resp_support_free_days)
   )
 
-admission_units_by_year
+los_data_binned <- data.frame(table(histogram_data$los_groups)) |>
+  setNames(c("Days", "Patients")) |>
+  # Set values to be "< 5" if fewer than 5 patients in this outcome for privacy
+  mutate(Patients = case_when(
+    Patients == 0 ~ "0",
+    Patients < 5 ~ "<5",
+    TRUE ~ as.character(Patients)
+  ))
 
+resp_free_days_binned <- data.frame(table(histogram_data$resp_free_days_groups))|>
+  setNames(c("Days", "Patients"))|>
+  # Set values to be "< 5" if fewer than 5 patients in this outcome for privacy
+  mutate(Patients = case_when(
+    Patients == 0 ~ "0",
+    Patients < 5 ~ "<5",
+    TRUE ~ as.character(Patients)
+  ))
+  
 # Output to csv
-write.csv(admission_units_by_year,
+write.csv(los_data_binned,
           paste0(
-            project_location,"/", site, "_project_output/", site,"_fig_2a_data_counts.csv"), 
+            project_location,"/", site, "_project_output/", site,"_los_data_binned.csv"), 
             row.names = FALSE)
+write.csv(resp_free_days_binned,
+          paste0(
+            project_location,"/", site, "_project_output/", site,"_resp_free_days_binned.csv"), 
+            row.names = FALSE)
+
+los_histogram <- ggplot(los_data_binned |>
+         mutate(Patients = case_when(
+            Patients == "< 5" ~ 0,
+            TRUE ~ as.numeric(Patients)
+          )
+         ), aes(x = Days, y = Patients, group = 1)) +
+  geom_col(width = 1) +
+  theme_minimal() +
+  labs(title="Length of Stay")
+ 
+resp_free_histogram <- ggplot(resp_free_days_binned |>
+         mutate(Patients = case_when(
+            Patients == "< 5" ~ 0,
+            TRUE ~ as.numeric(Patients)
+          )
+         ), aes(x = Days, y = Patients, group = 1)) +
+  geom_col(width = 1) +
+  theme_minimal() +
+  labs(title="Number of Respiratory Support-Free Days")
+
+# Save the image of the plot
+ggsave(
+  filename = paste0(local_fig_dir, site, "_los_histogram.jpg"),
+  plot = los_histogram,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+ggsave(
+  filename = paste0(local_fig_dir, site, "_resp_free_histogram.jpg"),
+  plot = resp_free_histogram,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+
 ```
 
 # Output which hospitals have which types of units
