@@ -276,46 +276,6 @@ run_logit_models <- function(cohort_data, hosp_data){
 ```
 
 ```{r}
-model_equation <- paste0("death_hospice", " ~ icu_admission + ", paste(covariates, collapse = " + "))
-
-model_data <- final_cohort |> 
-    filter(triage_location %in% c("icu", "ward")) |>
-    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0)) |>
-    filter(first_hospital_id == "JHH")
-
-# Run logistic regression
-      model_1 <- glm(
-        model_equation,
-        data=model_data,
-        family=binomial
-        )
-      
-      # Marginal effects
-      marginal_effects <- avg_slopes(
-        model=model_1,
-        newdata = datagrid(
-          model=model_1,
-          grid_type="counterfactual",
-          icu_admission=c(0,1),
-          variables="icu_admission"
-          )
-        ) |>
-        filter(term=="icu_admission")
-      
-      marginal_effects_2 <- avg_predictions(
-        model=model_1,
-        newdata = datagrid(
-          model=model_1,
-          grid_type="counterfactual",
-          icu_admission=c(0,1)
-          ),
-        by = "icu_admission"
-        ) 
-  
-```
-
-
-```{r}
 model_coefficients <- run_logit_models(final_cohort, hospital_data)
 
 no_pandemic_model_coefficients <- run_logit_models(no_pandemic_cohort, no_pandemic_hospital_data)
