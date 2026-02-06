@@ -352,6 +352,7 @@ run_prop_odds_models <- function(cohort_data, hosp_data){
         }
         write_csv(marginal_effects, paste0(model_out_dir, site, 
                                            prefix_name, "_",outcome,
+                                           "_", hosp_data$first_hospital_id[i],
                                            "_marginal_effects.csv"))
         
         cat(paste0(" Complete!\n"))
