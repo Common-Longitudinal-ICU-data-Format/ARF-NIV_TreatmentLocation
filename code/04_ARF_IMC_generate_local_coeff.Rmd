@@ -170,24 +170,32 @@ run_logit_models <- function(cohort_data, hosp_data){
   # Remove IMC patients and add indicator if admitted to ICU
   all_model_data <- cohort_data |> 
     filter(triage_location %in% c("icu", "ward")) |>
-    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0))
+    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0)) |>
+    # Remove unused factor levels if not in use (ie for sensitivity analysis without pandemic years)
+    droplevels()
   
-    # Initialize the model coefficients dataframe
-    model_coefficients <- data.frame(
-      site = character(),
-      hospital = character(),
-      imc_capable = numeric(),
-      academic_community = character(),
-      outcome=character(),
-      beta=numeric(),
-      beta_error=numeric(),
-      n_obs=integer(),
-      p_value=numeric(),
-      risk_difference=numeric(),
-      risk_difference_error=numeric(),
-      risk_difference_p=numeric(),
-      stringsAsFactors = FALSE
-    )
+  # Initialize the model coefficients dataframe
+  model_coefficients <- data.frame(
+    site = character(),
+    hospital = character(),
+    imc_capable = numeric(),
+    academic_community = character(),
+    outcome=character(),
+    beta=numeric(),
+    beta_error=numeric(),
+    n_obs=integer(),
+    p_value=numeric(),
+    risk_difference=numeric(),
+    risk_difference_error=numeric(),
+    risk_difference_p=numeric(),
+    prediction_icu=numeric(),
+    prediction_icu_error=numeric(),
+    prediction_icu_p=numeric(),
+    prediction_ward=numeric(),
+    prediction_ward_error=numeric(),
+    prediction_ward_p=numeric(),
+    stringsAsFactors = FALSE
+  )
   
   # Iterate over each binary outcome of interest
   for(outcome in outcomes_binary){
@@ -212,16 +220,29 @@ run_logit_models <- function(cohort_data, hosp_data){
         )
       
       # Marginal effects
-      marginal_effects <- avg_slopes(
+      marginal_effects_slopes <- avg_slopes(
         model=model_1,
         newdata = datagrid(
-          model=model_1,
+          #model=model_1,
+          newdata=model_data,
           grid_type="counterfactual",
           icu_admission=c(0,1),
           variables="icu_admission"
           )
         ) |>
         filter(term=="icu_admission")
+      
+      
+      marginal_effects_preds <- avg_predictions(
+        model=model_1,
+        newdata = datagrid(
+          #model=model_1,
+          newdata=model_data,
+          grid_type="counterfactual",
+          icu_admission=c(0,1)
+          ),
+        by = "icu_admission"
+      ) 
       
       model_coefficients <- model_coefficients |>
         add_row(
@@ -234,9 +255,15 @@ run_logit_models <- function(cohort_data, hosp_data){
           beta_error=coeftest(model_1)["icu_admission","Std. Error"],
           n_obs=nobs(model_1),
           p_value=coeftest(model_1)["icu_admission","Pr(>|z|)"],
-          risk_difference=marginal_effects$estimate,
-          risk_difference_error=marginal_effects$std.error,
-          risk_difference_p=marginal_effects$p.value
+          risk_difference=marginal_effects_slopes$estimate,
+          risk_difference_error=marginal_effects_slopes$std.error,
+          risk_difference_p=marginal_effects_slopes$p.value,
+          prediction_icu=(marginal_effects_preds |> filter(icu_admission==1))$estimate,
+          prediction_icu_error=(marginal_effects_preds |> filter(icu_admission==1))$std.error,
+          prediction_icu_p=(marginal_effects_preds |> filter(icu_admission==1))$p.value,
+          prediction_ward=(marginal_effects_preds |> filter(icu_admission==0))$estimate,
+          prediction_ward_error=(marginal_effects_preds |> filter(icu_admission==0))$std.error,
+          prediction_ward_p=(marginal_effects_preds |> filter(icu_admission==0))$p.value,
         )
       
       cat(paste0(" Complete!\n"))
@@ -249,7 +276,48 @@ run_logit_models <- function(cohort_data, hosp_data){
 ```
 
 ```{r}
+model_equation <- paste0("death_hospice", " ~ icu_admission + ", paste(covariates, collapse = " + "))
+
+model_data <- final_cohort |> 
+    filter(triage_location %in% c("icu", "ward")) |>
+    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0)) |>
+    filter(first_hospital_id == "JHH")
+
+# Run logistic regression
+      model_1 <- glm(
+        model_equation,
+        data=model_data,
+        family=binomial
+        )
+      
+      # Marginal effects
+      marginal_effects <- avg_slopes(
+        model=model_1,
+        newdata = datagrid(
+          model=model_1,
+          grid_type="counterfactual",
+          icu_admission=c(0,1),
+          variables="icu_admission"
+          )
+        ) |>
+        filter(term=="icu_admission")
+      
+      marginal_effects_2 <- avg_predictions(
+        model=model_1,
+        newdata = datagrid(
+          model=model_1,
+          grid_type="counterfactual",
+          icu_admission=c(0,1)
+          ),
+        by = "icu_admission"
+        ) 
+  
+```
+
+
+```{r}
 model_coefficients <- run_logit_models(final_cohort, hospital_data)
+
 no_pandemic_model_coefficients <- run_logit_models(no_pandemic_cohort, no_pandemic_hospital_data)
 ```
 
