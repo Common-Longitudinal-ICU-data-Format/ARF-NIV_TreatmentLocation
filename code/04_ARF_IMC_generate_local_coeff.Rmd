@@ -129,12 +129,13 @@ reformat_cohort_cols <- function(df) {
     sf_factor = factor(
       case_when(
         is.na(sf_value) ~ "Not present",
+        sf_value > 300 ~ "> 300",
         sf_value > 250 ~ "> 250",
         sf_value > 200 ~ "> 200",
-        sf_value > 150 ~ "> 150",
-        TRUE ~ "<= 150"
+        sf_value > 120 ~ "> 120",
+        TRUE ~ "<= 120"
       ),
-      levels=c("Not present", "> 250", "> 200","> 150", "<= 150")
+      levels=c("Not present", "> 300","> 250", "> 200","> 120", "<= 120")
     ),
     
     # Set cutoffs for pH
