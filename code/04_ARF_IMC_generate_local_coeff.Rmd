@@ -367,22 +367,29 @@ run_prop_odds_models <- function(cohort_data, hosp_data){
             # May need to add some stuff for marginal effects here
         )
         
-        cat(paste0(" Running marginal effects...   "))
+        # Only do marginal effects for resp support free days
+        if(outcome == "resp_support_free_days"){
+          
+          cat(paste0(" Running marginal effects...   "))
         
-        # Running marginal effects, stratified by ICU admission
-        marginal_effects <- avg_predictions(model_2, by="icu_admission")
-        
-        cat(paste0(" Saving marginal effects...   "))
-        # Output marginal effects result, file name determined by cohort
-        prefix_name <- ""
-        # other option is the no covid group
-        if(deparse(substitute(cohort_data)) == "no_pandemic_cohort"){
-          prefix_name <- "_no_covid"
+          # Running marginal effects, stratified by ICU admission
+          marginal_effects <- avg_predictions(model_2, by="icu_admission")
+          
+          cat(paste0(" Saving marginal effects...   "))
+          # Output marginal effects result, file name determined by cohort
+          prefix_name <- ""
+          # other option is the no covid group
+          if(deparse(substitute(cohort_data)) == "no_pandemic_cohort"){
+            prefix_name <- "_no_covid"
+          }
+          write_csv(marginal_effects, paste0(model_out_dir, site, 
+                                             prefix_name, "_",outcome,
+                                             "_", hosp_data$first_hospital_id[i],
+                                             "_marginal_effects.csv"))
         }
-        write_csv(marginal_effects, paste0(model_out_dir, site, 
-                                           prefix_name, "_",outcome,
-                                           "_", hosp_data$first_hospital_id[i],
-                                           "_marginal_effects.csv"))
+        else{
+          cat(paste0(" Not running marginal effects...   "))
+        }
         
         cat(paste0(" Complete!\n"))
       }
@@ -405,48 +412,4 @@ write_csv(model_coefficients_prop_odds, paste0(model_out_dir,
 write_csv(no_pandemic_model_coefficients_prop_odds, paste0(model_out_dir, 
                                                         site,
                                                         "_no_covid_prop_odds_model_coefficients.csv"))
-```
-
-# OLD, includes marginal effects for counting outcomes
-```{r}
-# test_model_data <- final_cohort |>
-#   filter(triage_location %in% c("icu", "ward")) 
-# 
-# # Set the cutoff for length of stay
-# max_days_los <- ceiling(max(test_model_data$los_penalized))
-# 
-# test_model_data <- test_model_data |>
-#   mutate(resp_support_free_days = factor(floor(resp_support_free_days),
-#                                          levels=as.character(0:28),
-#                                          ordered=TRUE),
-#            
-#            los_ordinal = cut(
-#              los_penalized,
-#              breaks = c(seq(-0.5, max_days_los + 0.5, by = 1)),
-#              labels = c(as.character(0:max_days_los)),
-#              right = TRUE,
-#              ordered_result = TRUE
-#     )) |>
-#   mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0)) |>
-#   ### Hospital specific ###
-#   filter(first_hospital_id == "BMC")
-# 
-# model_equation <- paste0("los_ordinal ~ icu_admission + ", paste(covariates, collapse = " + "))
-# 
-# test_model <- clm(
-#   model_equation,
-#   data=test_model_data,
-#   link="logit"
-# )
-# 
-# test_marginal_effects <- avg_predictions(test_model, by="icu_admission")
-# 
-# # p_3 <- avg_predictions(test_model,
-# #                        newdata=datagrid(
-# #                          model=test_model,
-# #                           grid_type="counterfactual",
-# #                           icu_admission=c(0,1),
-# #                           variables="icu_admission"
-# #                        ),
-# #                        by="icu_admission")
 ```

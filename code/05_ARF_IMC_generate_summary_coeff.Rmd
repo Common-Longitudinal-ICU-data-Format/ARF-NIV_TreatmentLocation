@@ -12,7 +12,8 @@ packages <- c(
   "yaml",
   "rprojroot",
   "metafor",
-  "meta"
+  "meta",
+  "ggplot2"
 )
 
 install_if_missing <- function(package) {
@@ -38,7 +39,8 @@ if(config$institution != "Hopkins"){
 
 # Assign config values to R variables
 project_location <- config$project_location
-outcomes <- global_config$outcomes
+outcomes_binary <- global_config$outcomes_binary
+outcomes_counts <- global_config$outcomes_counts
 
 rm(config, global_config)
 ```
@@ -52,93 +54,230 @@ sites <- c("Hopkins")
 # Output directory for global model outcomes
 if (!dir.exists(paste0(project_location, "/global_model_outputs"))) {
   dir.create(paste0(project_location, "/global_model_outputs"))}
-global_out_dir <- file.path(project_location, "global_model_outputs")
+global_out_dir <- file.path(project_location, "global_model_outputs/")
 
 ```
 
 ```{r}
 # Get site folder path
-site_export_dir <- function(site) {
-  file.path(paste0(project_location, 
+# cohort_name can be set as "_no_covid"
+# model_run can be logit or prop_odds
+site_export_dir <- function(site, model_run, cohort_name="") {
+  
+  if(model_run == "logit"){
+    file_name <- "_logit_model_coefficients.csv"
+  }
+  else{
+    file_name <- "_prop_odds_model_coefficients.csv"
+  }
+  
+  return(file.path(paste0(project_location, 
             site, 
             "_project_output/",
+            "local_model_outputs/",
             site,
-            "_model_coefficients.csv"))
+            cohort_name,
+            file_name)))
 }
 
 ```
 
 ```{r}
 
-model_coefficients <- data.frame(
-  site = character(),
-  hospital = character(),
-  imc_capable = character(),
-  academic_community = character(),
-  outcome=character(),
-  beta=numeric(),
-  beta_error=numeric(),
-  n_obs=integer(),
-  risk_difference=numeric(),
-  risk_difference_error=numeric(),
-  stringsAsFactors = FALSE
-  # ADD P VALUES
-)
+model_coefficients_binary <- data.frame(
+    site = character(),
+    hospital = character(),
+    imc_capable = numeric(),
+    academic_community = character(),
+    outcome=character(),
+    beta=numeric(),
+    beta_error=numeric(),
+    n_obs=integer(),
+    p_value=numeric(),
+    risk_difference=numeric(),
+    risk_difference_error=numeric(),
+    risk_difference_p=numeric(),
+    prediction_icu=numeric(),
+    prediction_icu_error=numeric(),
+    prediction_icu_p=numeric(),
+    prediction_ward=numeric(),
+    prediction_ward_error=numeric(),
+    prediction_ward_p=numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Initialize the model coefficients dataframe
+  model_coefficients_counts <- data.frame(
+    site = character(),
+    hospital = character(),
+    imc_capable = numeric(),
+    academic_community = character(),
+    outcome=character(),
+    beta=numeric(),
+    beta_error=numeric(),
+    n_obs=integer(),
+    p_value=numeric(),
+    stringsAsFactors = FALSE
+    )
 
 # Iterate over each site, load in model outputs
 for(s in sites){
-  model_coefficients <- model_coefficients |>
+  
+  model_coefficients_binary <- model_coefficients_binary |>
     add_row(
-      read_csv(site_export_dir(site=s), show_col_types=FALSE)
+      read_csv(site_export_dir(site=s, model_run="logit"), show_col_types=FALSE)
     )
+  
+  
+  model_coefficients_counts <- model_coefficients_counts |>
+    add_row(
+      read_csv(site_export_dir(site=s, model_run="prop_odds"), show_col_types=FALSE)
+    )
+}
+  
+# Ensure correct data type
+model_coefficients_binary$imc_capable <- factor(model_coefficients_binary$imc_capable)
+model_coefficients_counts$imc_capable <- factor(model_coefficients_counts$imc_capable)
+model_coefficients_binary$academic_community <- factor(model_coefficients_binary$academic_community)
+model_coefficients_counts$academic_community <- factor(model_coefficients_counts$academic_community)
+```
+
+# Binary outcomes
+```{r}
+
+meta_analyses_log_odds <- list()
+meta_analyses_risk_diff <- list()
+meta_analyses_icu_pred <- list()
+meta_analyses_ward_pred <- list()
+
+# Loop over each binary outcome
+for (outcome_binary in outcomes_binary){
+  
+  # Subset to only outcome of interest
+  model_coefficients <- model_coefficients_binary |>
+    filter(outcome == outcome_binary)
+  
+  ### log odds ###
+  meta_analyses_log_odds[[outcome_binary]] <- rma(
+    data=model_coefficients,
+    yi=beta,
+    sei=beta_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  
+  forest_log_odds <- model_coefficients |>
+    mutate(
+      odds_ratio = exp(beta),
+      ci_low  = exp(beta - 1.96 * beta_error),
+      ci_high = exp(beta + 1.96 * beta_error),
+      dot_size = scales::rescale(n_obs, to=c(5,10)),
+      # Order it so that they go in order from lowest to highest odds ratios for display
+      hospital_num = fct_reorder(as.factor(hospital), odds_ratio)
+    ) |>
+    select(hospital_num, imc_capable, academic_community,odds_ratio, ci_low, ci_high, dot_size)
+  
+  p <- ggplot(forest_log_odds, aes(x = odds_ratio, y = hospital_num)) +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_errorbarh(
+    aes(xmin = ci_low, xmax = ci_high),
+    height = 0
+  ) +
+  geom_point(
+    aes(size = dot_size,
+        color=imc_capable,
+        shape=academic_community)
+  ) +
+  #guides(size="none")+
+  scale_x_log10() +
+  scale_size_continuous(
+      breaks = quantile(forest_log_odds$dot_size, probs = c(0.25, 0.75)),
+      labels = c("Fewer Patients", "More Patients")
+  ) +
+  scale_color_manual(
+    values=c("0" = "#F81212", "1" = "#00BFCF"),
+    labels=c("0" = "Incapable", "1" = "Capable")
+  ) +
+  scale_shape_manual(
+    values=c("academic" = 15, "community" =17),
+    labels=c("academic" = "Academic", "community" = "Community")
+  ) +
+  theme_minimal()+
+  labs(
+    x = "Odds Ratio (log scale)",
+    y = "",
+    color="IMC Capable",
+    size = "Number of Patients",
+    shape= "Academic or Community",
+    title = case_when(
+      outcome_binary == "death_hospice" ~ "Death/Discharge to Hospice",
+      outcome_binary == "organ_failure_yn" ~ "Organ Failure",
+      TRUE ~ outcome_binary),
+    subtitle= paste0("Among sites: ", paste0(sites, collapse=", "))
+  ) +
+  theme(
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank()
+  )
+  
+  print(p)
+
+  ggsave(paste0(global_out_dir, outcome_binary,"_odds_ratios_by_hospital.jpg"), plot=p, width=7, height=5, dpi=300)
+
+  
+  ### risk difference ###
+  meta_analyses_risk_diff[[outcome_binary]] <- rma(
+    data=model_coefficients,
+    yi=risk_difference,
+    sei=risk_difference_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  
+  ### predicted values (ICU and ward) ###
+  meta_analyses_icu_pred[[outcome_binary]] <- rma(
+    data=model_coefficients,
+    yi=prediction_icu,
+    sei=prediction_icu_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  meta_analyses_ward_pred[[outcome_binary]] <- rma(
+    data=model_coefficients,
+    yi=prediction_ward,
+    sei=prediction_ward_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  
+}
+
+```
+
+# Count outcomes
+```{r}
+meta_analyses_prop_odds <- list()
+
+# Loop over each count outcome
+for (outcome_counts in outcomes_counts){
+  
+  # Subset to only outcome of interest
+  model_coefficients <- model_coefficients_counts |>
+    filter(outcome == outcome_counts)
+  
+  meta_analyses_prop_odds[[outcome_counts]] <- rma(
+    data=model_coefficients,
+    yi=beta,
+    sei=beta_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  
+  # Only do this for respiratory free days
+  if(outcome_counts == "resp_support_free_days"){
+    # TODO
+    # Create histogram with predicted days
+  }
 }
 ```
 
-```{r}
-
-meta_analysis_0 <- rma(
-  data=model_coefficients,
-  yi=beta,
-  sei=beta_error,
-  method="REML"
-)
-
-meta_analysis_0
-
-
-meta_analysis <- rma(
-  data=model_coefficients,
-  yi=beta,
-  sei=beta_error,
-  method="REML",
-  mods= ~ imc_capable + academic_community
-)
-
-meta_analysis
-
-meta_analysis_2 <- rma(
-  data=model_coefficients,
-  yi=risk_difference,
-  sei=risk_difference_error,
-  method="REML",
-  mods= ~ imc_capable + academic_community
-)
-
-summary(meta_analysis_2)
-```
-
-```{r}
-meta1 <- metagen(
-  data=model_coefficients,
-  TE=beta,
-  seTE=beta_error,
-  method.tau="REML",
-  common=F, # Do not want common effect (only want random)
-  random=T, # I want to report random effects
-  sm="OR"#,
-  #mods= ~ imc_capable + academic_community
-)
-
-forest(meta1, layout="JAMA")
-# Find a way to size the points based on n_obs
-```
