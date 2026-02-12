@@ -61,14 +61,17 @@ global_out_dir <- file.path(project_location, "global_model_outputs/")
 ```{r}
 # Get site folder path
 # cohort_name can be set as "_no_covid"
-# model_run can be logit or prop_odds
+# model_run can be logit, prop_odds, or icu_adm
 site_export_dir <- function(site, model_run, cohort_name="") {
   
   if(model_run == "logit"){
     file_name <- "_logit_model_coefficients.csv"
   }
-  else{
+  else if (model_run == "prop_odds"){
     file_name <- "_prop_odds_model_coefficients.csv"
+  }
+  else{
+    file_name <- "_icu_adm_model_coefficients.csv"
   }
   
   return(file.path(paste0(project_location, 
@@ -134,6 +137,19 @@ model_coefficients_binary <- data.frame(
     p_value=numeric(),
     stringsAsFactors = FALSE
     )
+  
+  model_coefficients_icu_adm <- data.frame(
+    site = character(),
+    hospital = character(),
+    imc_capable = numeric(),
+    academic_community = character(),
+    outcome=character(),
+    n_obs=integer(),
+    prediction_icu_adm=numeric(),
+    prediction_icu_error=numeric(),
+    prediction_icu_p=numeric(),
+    stringsAsFactors = FALSE
+  )
 
 # Iterate over each site, load in model outputs
 for(s in sites){
@@ -147,6 +163,11 @@ for(s in sites){
   model_coefficients_counts <- model_coefficients_counts |>
     add_row(
       read_csv(site_export_dir(site=s, model_run="prop_odds"), show_col_types=FALSE)
+    )
+  
+  model_coefficients_icu_adm <- model_coefficients_icu_adm |>
+    add_row(
+      read_csv(site_export_dir(site=s, model_run="icu_adm"), show_col_types=FALSE)
     )
 }
   
@@ -389,6 +410,41 @@ meta_analyses_counts <- add_p_symbols(meta_analyses_counts |>
 write_csv(meta_analyses_counts, paste0(global_out_dir, "meta_analyses_counts.csv"))
 ```
 
+# Meta analysis for process outcome of ICU admission
+```{r}
+meta_analyses_icu_adm <- data.frame(
+  outcome=character(),
+  covariate=character(),
+  estimate=numeric(),
+  error=numeric(),
+  p=numeric()
+)
+
+odds_icu_adm <- rma(
+    data=model_coefficients_icu_adm, # No need to subset for outcome, since all one outcome
+    yi=prediction_icu_adm,
+    sei=prediction_icu_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+)
+
+meta_analyses_icu_adm <- data.frame(
+    outcome="ICU admission",
+    covariate=rownames(odds_icu_adm$beta),
+    estimate = odds_icu_adm$beta[,1],
+    error = odds_icu_adm$se,
+    p = odds_icu_adm$pval,
+    row.names=NULL
+  )
+
+# Add p symbols and remove intercept
+meta_analyses_icu_adm <- add_p_symbols(meta_analyses_icu_adm |>
+                                        filter(covariate != "intrcpt"))
+
+
+write_csv(meta_analyses_counts, paste0(global_out_dir, "meta_analyses_icu_admission.csv"))
+
+```
 
 # Create histograms of compiled predicted respiratory support free days
 ```{r}
