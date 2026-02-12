@@ -96,6 +96,7 @@ site_export_dir_marginal_effects <- function(site, hospital, cohort_name="") {
 
 ```
 
+# Reading in local site results, compiling into one df
 ```{r}
 
 model_coefficients_binary <- data.frame(
@@ -156,31 +157,10 @@ model_coefficients_binary$academic_community <- factor(model_coefficients_binary
 model_coefficients_counts$academic_community <- factor(model_coefficients_counts$academic_community)
 ```
 
-# Binary outcomes
+# Helper function for plotting and formatting p value symbols
 ```{r}
-
-meta_analyses_log_odds <- list()
-meta_analyses_risk_diff <- list()
-meta_analyses_icu_pred <- list()
-meta_analyses_ward_pred <- list()
-
-# Loop over each binary outcome
-for (outcome_binary in outcomes_binary){
-  
-  # Subset to only outcome of interest
-  model_coefficients <- model_coefficients_binary |>
-    filter(outcome == outcome_binary)
-  
-  ### log odds ###
-  meta_analyses_log_odds[[outcome_binary]] <- rma(
-    data=model_coefficients,
-    yi=beta,
-    sei=beta_error,
-    method="REML",
-    mods= ~ imc_capable + academic_community
-  )
-  
-  forest_log_odds <- model_coefficients |>
+plot_ORs <- function(df){
+  forest_log_odds <- df |>
     mutate(
       odds_ratio = exp(beta),
       ci_low  = exp(beta - 1.96 * beta_error),
@@ -237,10 +217,67 @@ for (outcome_binary in outcomes_binary){
   print(p)
 
   ggsave(paste0(global_out_dir, outcome_binary,"_odds_ratios_by_hospital.jpg"), plot=p, width=7, height=5, dpi=300)
+}
 
+add_p_symbols <- function(df){
+  return(
+    df |>
+      mutate(
+        p_symb = case_when(
+          p < 0.001 ~ "***",
+          p < 0.01 ~ "**",
+          p < 0.05 ~ "*",
+          TRUE ~ "NS"
+        )
+      )
+  )
+}
+```
+
+
+# Binary outcomes
+```{r}
+
+meta_analyses_binary <- data.frame(
+  outcome=character(),
+  measure=character(),
+  covariate=character(),
+  estimate=numeric(),
+  error=numeric(),
+  p=numeric()
+)
+
+# Loop over each binary outcome
+for (outcome_binary in outcomes_binary){
+  
+  # Subset to only outcome of interest
+  model_coefficients <- model_coefficients_binary |>
+    filter(outcome == outcome_binary)
+  
+  ### log odds ###
+  log_odds <- rma(
+    data=model_coefficients,
+    yi=beta,
+    sei=beta_error,
+    method="REML",
+    mods= ~ imc_capable + academic_community
+  )
+  
+  meta_analyses_binary <- meta_analyses_binary |>
+    add_row(
+    outcome=outcome_binary,
+    measure="log odds",
+    covariate=rownames(log_odds$beta),
+    estimate = log_odds$beta[,1],
+    error = log_odds$se,
+    p = log_odds$pval
+  )
+  
+  # Call helper function to plot the ORs
+  plot_ORs(model_coefficients)
   
   ### risk difference ###
-  meta_analyses_risk_diff[[outcome_binary]] <- rma(
+  risk_diff <- rma(
     data=model_coefficients,
     yi=risk_difference,
     sei=risk_difference_error,
@@ -248,29 +285,73 @@ for (outcome_binary in outcomes_binary){
     mods= ~ imc_capable + academic_community
   )
   
+  meta_analyses_binary <- meta_analyses_binary |>
+    add_row(
+    outcome=outcome_binary,
+    measure="risk difference",
+    covariate=rownames(risk_diff$beta),
+    estimate = risk_diff$beta[,1],
+    error = risk_diff$se,
+    p = risk_diff$pval
+  )
+  
   ### predicted values (ICU and ward) ###
-  meta_analyses_icu_pred[[outcome_binary]] <- rma(
+  icu_pred <- rma(
     data=model_coefficients,
     yi=prediction_icu,
     sei=prediction_icu_error,
     method="REML",
     mods= ~ imc_capable + academic_community
   )
-  meta_analyses_ward_pred[[outcome_binary]] <- rma(
+  meta_analyses_binary <- meta_analyses_binary |>
+    add_row(
+    outcome=outcome_binary,
+    measure="icu predicted",
+    covariate=rownames(icu_pred$beta),
+    estimate = icu_pred$beta[,1],
+    error = icu_pred$se,
+    p = icu_pred$pval
+  )
+    
+  ward_pred <- rma(
     data=model_coefficients,
     yi=prediction_ward,
     sei=prediction_ward_error,
     method="REML",
     mods= ~ imc_capable + academic_community
   )
+  meta_analyses_binary <- meta_analyses_binary |>
+    add_row(
+    outcome=outcome_binary,
+    measure="ward predicted",
+    covariate=rownames(ward_pred$beta),
+    estimate = ward_pred$beta[,1],
+    error = ward_pred$se,
+    p = ward_pred$pval
+  )
   
 }
+
+# Clean R Workspace
+rm(model_coefficients, log_odds, risk_diff, icu_pred, ward_pred)
+
+# Add p symbols and remove intercept
+meta_analyses_binary <- add_p_symbols(meta_analyses_binary |>
+                                        filter(covariate != "intrcpt"))
+
+write_csv(meta_analyses_binary, paste0(global_out_dir, "meta_analyses_binary.csv"))
 
 ```
 
 # Count outcomes
 ```{r}
-meta_analyses_prop_odds <- list()
+meta_analyses_counts <- data.frame(
+  outcome=character(),
+  covariate=character(),
+  estimate=numeric(),
+  error=numeric(),
+  p=numeric()
+)
 
 # Loop over each count outcome
 for (outcome_counts in outcomes_counts){
@@ -279,14 +360,33 @@ for (outcome_counts in outcomes_counts){
   model_coefficients <- model_coefficients_counts |>
     filter(outcome == outcome_counts)
   
-  meta_analyses_prop_odds[[outcome_counts]] <- rma(
+  prop_odds <- rma(
     data=model_coefficients,
     yi=beta,
     sei=beta_error,
     method="REML",
     mods= ~ imc_capable + academic_community
   )
+  
+  meta_analyses_counts <- meta_analyses_counts |>
+    add_row(
+    outcome=outcome_counts,
+    covariate=rownames(prop_odds$beta),
+    estimate = prop_odds$beta[,1],
+    error = prop_odds$se,
+    p = prop_odds$pval
+  )
 }
+
+# Clean R Workspace
+rm(model_coefficients, prop_odds)
+
+# Add p symbols and remove intercept
+meta_analyses_counts <- add_p_symbols(meta_analyses_counts |>
+                                        filter(covariate != "intrcpt"))
+
+
+write_csv(meta_analyses_counts, paste0(global_out_dir, "meta_analyses_counts.csv"))
 ```
 
 
