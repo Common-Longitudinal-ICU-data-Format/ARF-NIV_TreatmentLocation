@@ -38,7 +38,4 @@ covariates:
   - "sepsis_in_ed"
   - "year"
   - "season"
-  
-strata_var:
-  - "triage_location_formatted"
 

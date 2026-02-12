@@ -413,3 +413,81 @@ write_csv(no_pandemic_model_coefficients_prop_odds, paste0(model_out_dir,
                                                         site,
                                                         "_no_covid_prop_odds_model_coefficients.csv"))
 ```
+
+
+```{r}
+# process outcome, triage to ICU
+run_secondary_models <- function(cohort_data, hosp_data){
+
+  # KEEP IMC patients for the secondary analysis
+  all_model_data <- cohort_data |> 
+    mutate(icu_admission = ifelse(tolower(triage_location)=="icu", 1, 0)) |>
+    # Remove unused factor levels if not in use (ie for sensitivity analysis without pandemic years)
+    droplevels()
+  
+  # Initialize the model coefficients dataframe
+  model_coefficients <- data.frame(
+    site = character(),
+    hospital = character(),
+    imc_capable = numeric(),
+    academic_community = character(),
+    outcome=character(),
+    n_obs=integer(),
+    prediction_icu_adm=numeric(),
+    prediction_icu_error=numeric(),
+    prediction_icu_p=numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Model ICU admission as the process outcome, using only covariates
+    model_equation <- paste0("icu_admission ~ ", paste(covariates, collapse = " + "))
+    cat("\n---------------------\n")
+    cat("Cohort: ", deparse(substitute(cohort_data)), "\n")
+    cat(paste0("Running models using equation:\n", model_equation, "\n\n"))
+    
+    # Iterate over each hospital at this local site
+    for(i in seq_len(nrow(hosp_data))){
+      cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n   "))
+      
+      # Only select rows at the given hospital
+      model_data <- all_model_data |> 
+        filter(first_hospital_id == hosp_data$first_hospital_id[i])
+      
+      # Run logistic regression
+      model_1 <- glm(
+        model_equation,
+        data=model_data,
+        family=binomial
+        )
+      
+      # No counterfactual since ICU admission is dependent variable
+      marginal_effects_preds <- avg_predictions(model=model_1) 
+      
+      model_coefficients <- model_coefficients |>
+        add_row(
+          site = site,
+          hospital = hosp_data$first_hospital_id[i],
+          imc_capable = hosp_data$imc_capable[i],
+          academic_community = hosp_data$academic_community[i],
+          outcome="icu_admission",
+          prediction_icu_adm=marginal_effects_preds$estimate,
+          prediction_icu_error=marginal_effects_preds$std.error,
+          prediction_icu_p=marginal_effects_preds$p.value,
+          n_obs=nobs(model_1)
+        )
+      
+      cat(paste0(" Complete!\n"))
+    }
+  return(model_coefficients)
+}
+```
+
+```{r}
+model_coefficients_icu_adm <- run_secondary_models(final_cohort, hospital_data)
+no_pandemic_model_coefficients_icu_adm <- run_secondary_models(no_pandemic_cohort, hospital_data)
+```
+
+```{r}
+write_csv(model_coefficients_icu_adm, paste0(model_out_dir, site,"_icu_adm_model_coefficients.csv"))
+write_csv(no_pandemic_model_coefficients_icu_adm, paste0(model_out_dir, site,"_no_covid_icu_adm_model_coefficients.csv"))
+```
