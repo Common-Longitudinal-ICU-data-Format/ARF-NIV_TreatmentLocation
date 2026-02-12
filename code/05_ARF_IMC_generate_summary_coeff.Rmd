@@ -306,9 +306,6 @@ marginal_effects_raw <- data.frame(
     stringsAsFactors = FALSE
   )
 
-
-# Hopkins_resp_support_free_days_BMC_marginal_effects.csv
-
 # Get list of site-hospital pairs
 site_hosp_pairs <- model_coefficients_counts |>
   select(site, hospital) |>
@@ -330,4 +327,62 @@ marginal_effects_raw <- marginal_effects_raw |>
                           levels=as.character(0:28),
                           ordered=TRUE),
            icu_admission = factor(as.character(icu_admission), levels=c("0", "1")))
+```
+
+```{r}
+meta_analysis_resp_support <- marginal_effects_raw |>
+  mutate(variance = (std.error)^2) |>
+  select(group, icu_admission, estimate, variance) |>
+  group_by(group, icu_admission) |>
+  group_modify(~{
+    
+    fit <- rma.uni(yi = .x$estimate, vi = .x$variance, method = "REML")
+
+    tibble(
+      n_hosp = nrow(.x),
+      pooled_estimate = as.numeric(fit$b[1]),
+      pooled_se = as.numeric(fit$se[1]),
+      ci_low = as.numeric(fit$ci.lb),
+      ci_high = as.numeric(fit$ci.ub)
+    )
+  }) |>
+  ungroup() |>
+  rename(Days=group)
+
+```
+
+```{r}
+resp_free_icu_histogram <- ggplot(meta_analysis_resp_support |> filter(icu_admission=="1"), aes(x = Days, y = pooled_estimate)) +
+  geom_col(width = 1, fill="red") +
+  theme_minimal() +
+  labs(title="Predicted Number of Respiratory Support-Free Days (ICU)",
+       y ="Proportion of Patients")
+
+resp_free_icu_histogram
+
+ggsave(
+  filename = paste0(global_out_dir, "resp_free_icu_histogram.jpg"),
+  plot = resp_free_icu_histogram,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+```
+
+```{r}
+resp_free_ward_histogram <- ggplot(meta_analysis_resp_support |> filter(icu_admission=="0"), aes(x = Days, y = pooled_estimate)) +
+  geom_col(width = 1, fill="blue") +
+  theme_minimal() +
+  labs(title="Predicted Number of Respiratory Support-Free Days (Ward)",
+       y ="Proportion of Patients")
+
+resp_free_ward_histogram
+
+ggsave(
+  filename = paste0(global_out_dir, "resp_free_ward_histogram.jpg"),
+  plot = resp_free_ward_histogram,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
 ```
