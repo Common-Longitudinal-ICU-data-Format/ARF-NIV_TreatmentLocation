@@ -80,6 +80,20 @@ site_export_dir <- function(site, model_run, cohort_name="") {
             file_name)))
 }
 
+site_export_dir_marginal_effects <- function(site, hospital, cohort_name="") {
+  
+    return(file.path(paste0(project_location, 
+            site, 
+            "_project_output/",
+            "local_model_outputs/",
+            site,
+            cohort_name,
+            "_resp_support_free_days_",
+            hospital,
+            "_marginal_effects.csv")))
+  
+}
+
 ```
 
 ```{r}
@@ -272,12 +286,48 @@ for (outcome_counts in outcomes_counts){
     method="REML",
     mods= ~ imc_capable + academic_community
   )
-  
-  # Only do this for respiratory free days
-  if(outcome_counts == "resp_support_free_days"){
-    # TODO
-    # Create histogram with predicted days
-  }
 }
 ```
 
+
+# Create histograms of compiled predicted respiratory support free days
+```{r}
+
+marginal_effects_raw <- data.frame(
+    group = numeric(),
+    icu_admission = numeric(),
+    estimate = numeric(),
+    std.error = numeric(),
+    statistic = numeric(),
+    p.value = numeric(),
+    s.value = numeric(),
+    conf.low = numeric(),
+    conf.high = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+
+# Hopkins_resp_support_free_days_BMC_marginal_effects.csv
+
+# Get list of site-hospital pairs
+site_hosp_pairs <- model_coefficients_counts |>
+  select(site, hospital) |>
+  distinct()
+
+for(i in seq_len(nrow(site_hosp_pairs))){
+  
+  marginal_effects_raw <- marginal_effects_raw |>
+    add_row(
+      read_csv(site_export_dir_marginal_effects(site=site_hosp_pairs$site[i],
+                                                hospital=site_hosp_pairs$hospital[i]),
+               show_col_types=FALSE)
+    )
+}
+
+# Ensure correct data type
+marginal_effects_raw <- marginal_effects_raw |>
+    mutate(group = factor(group,
+                          levels=as.character(0:28),
+                          ordered=TRUE),
+           icu_admission = factor(as.character(icu_admission), levels=c("0", "1")))
+```
