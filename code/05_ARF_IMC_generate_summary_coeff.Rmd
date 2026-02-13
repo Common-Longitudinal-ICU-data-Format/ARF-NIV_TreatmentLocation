@@ -255,6 +255,61 @@ add_p_symbols <- function(df){
 }
 ```
 
+# Log file, report summary outcomes
+```{r}
+cat("Meta-analysis results summary:\n\n", file=paste0(global_out_dir, "meta_analyses_summaries.txt"))
+
+write_log <- function(message){
+  cat(message, file=paste0(global_out_dir, "meta_analyses_summaries.txt"), append=TRUE, sep="\n")
+}
+```
+
+```{r}
+
+extract_rma_results <- function(fit){
+
+  write_log(paste0("k = ", fit$k, "; tau^2 estimator: ", fit$method, "\n"))
+  
+  # heterogeneity_df <- data.frame(
+  #   c("tau^2 (estimated amount of residual heterogeneity):",
+  #     "I^2 (residual heterogeneity / unaccounted variability):",
+  #     "H^2 (unaccounted variability / sampling variability):",
+  #     "R^2 (amount of heterogeneity accounted for):"),
+  #   c(round(fit$tau2, 2), paste0(round(fit$I2,2), "%"), round(fit$H2, 2), paste0(round(fit$R2, 2), "%"))
+  # )
+  # colnames(heterogeneity_df) <- NULL
+  # rownames(heterogeneity_df) <- NULL
+  # 
+  # write_log(capture.output(print(heterogeneity_df, row.names=FALSE)))
+  
+  write_log(sprintf("%-55s %-15s", "tau^2 (estimated amount of residual heterogeneity):", as.character(round(fit$tau2, 2))))
+  write_log(sprintf("%-55s %-15s", "I^2 (residual heterogeneity / unaccounted variability):", paste0(round(fit$I2, 2), "%")))
+  write_log(sprintf("%-55s %-15s", "H^2 (unaccounted variability / sampling variability):", as.character(round(fit$H2, 2))))
+  write_log(sprintf("%-55s %-15s", "R^2 (amount of heterogeneity accounted for):", paste0(round(fit$R2, 2), "%")))
+  
+  write_log("\nModel results:")
+  
+  # coef_df <- data.frame(
+  #   term = rownames(fit$beta),
+  #   estimate = as.numeric(fit$beta),
+  #   se = fit$se,
+  #   zval = fit$zval,
+  #   pval = fit$pval,
+  #   ci.lb = fit$ci.lb,
+  #   ci.ub = fit$ci.ub
+  # )
+  # write_log(capture.output(print(coef_df, row.names=FALSE)))
+  
+  write_log(sprintf("%-35s %-15s %-15s %-15s", "Term", "Estimate", "se", "p-val"))
+  for(i in seq_len(nrow(fit$beta))){
+    write_log(sprintf("%-35s %-15s %-15s %-15s", rownames(fit$beta)[i], as.character(round(fit$se[i], 4)), as.character(round(fit$beta[i], 4)), as.character(round(fit$pval[i], 4))))
+  }
+  
+  write_log(paste0("\nTest for Residual Heterogeneity: QE = ", round(fit$QE, 4), ", p-val = ", round(fit$QEp, 4)))
+  write_log(paste0("\nTest of Moderators: QM = ", round(fit$QM, 4), ", p-val = ", round(fit$QMp, 4), "\n"))
+}
+
+```
 
 # Binary outcomes
 ```{r}
@@ -267,6 +322,8 @@ meta_analyses_binary <- data.frame(
   error=numeric(),
   p=numeric()
 )
+
+#model_result_summaries <- list()
 
 # Loop over each binary outcome
 for (outcome_binary in outcomes_binary){
@@ -283,6 +340,13 @@ for (outcome_binary in outcomes_binary){
     method="REML",
     mods= ~ imc_capable + academic_community
   )
+  #a<-log_odds
+  
+  write_log("\n----------------------------------------------------------------------\n")
+  write_log(paste0(outcome_binary, ":  Log Odds","\n"))
+  #write_log(capture.output(log_odds))
+  #model_result_summaries[[outcome_binary]][["log_odds"]] <- log_odds
+  extract_rma_results(log_odds)
   
   meta_analyses_binary <- meta_analyses_binary |>
     add_row(
@@ -306,6 +370,12 @@ for (outcome_binary in outcomes_binary){
     mods= ~ imc_capable + academic_community
   )
   
+  write_log("\n----------------------------------------------------------------------\n")
+  write_log(paste0(outcome_binary, ":  Risk Difference","\n"))
+  #write_log(capture.output(risk_diff))
+  extract_rma_results(risk_diff)
+  #model_result_summaries[[outcome_binary]][["risk_diff"]] <- risk_diff
+  
   meta_analyses_binary <- meta_analyses_binary |>
     add_row(
     outcome=outcome_binary,
@@ -324,6 +394,13 @@ for (outcome_binary in outcomes_binary){
     method="REML",
     mods= ~ imc_capable + academic_community
   )
+  
+  write_log("\n----------------------------------------------------------------------\n")
+  write_log(paste0(outcome_binary, ":  ICU predicted","\n"))
+  #write_log(capture.output(icu_pred))
+  extract_rma_results(icu_pred)
+  #model_result_summaries[[outcome_binary]][["icu_pred"]] <- icu_pred
+  
   meta_analyses_binary <- meta_analyses_binary |>
     add_row(
     outcome=outcome_binary,
@@ -341,6 +418,13 @@ for (outcome_binary in outcomes_binary){
     method="REML",
     mods= ~ imc_capable + academic_community
   )
+  
+  write_log("\n----------------------------------------------------------------------\n")
+  write_log(paste0(outcome_binary, ":  Ward predicted","\n"))
+  #write_log(capture.output(ward_pred))
+  extract_rma_results(ward_pred)
+  #model_result_summaries[[outcome_binary]][["ward_pred"]] <- ward_pred
+  
   meta_analyses_binary <- meta_analyses_binary |>
     add_row(
     outcome=outcome_binary,
@@ -375,11 +459,11 @@ meta_analyses_counts <- data.frame(
 )
 
 # Loop over each count outcome
-for (outcome_counts in outcomes_counts){
+for (outcome_count in outcomes_counts){
   
   # Subset to only outcome of interest
   model_coefficients <- model_coefficients_counts |>
-    filter(outcome == outcome_counts)
+    filter(outcome == outcome_count)
   
   prop_odds <- rma(
     data=model_coefficients,
@@ -389,9 +473,14 @@ for (outcome_counts in outcomes_counts){
     mods= ~ imc_capable + academic_community
   )
   
+  write_log("\n----------------------------------------------------------------------\n")
+  write_log(paste0(outcome_count, ": Prop Odds","\n"))
+  #write_log(capture.output(prop_odds))
+  extract_rma_results(prop_odds)
+  
   meta_analyses_counts <- meta_analyses_counts |>
     add_row(
-    outcome=outcome_counts,
+    outcome=outcome_count,
     covariate=rownames(prop_odds$beta),
     estimate = prop_odds$beta[,1],
     error = prop_odds$se,
@@ -427,6 +516,10 @@ odds_icu_adm <- rma(
     method="REML",
     mods= ~ imc_capable + academic_community
 )
+
+write_log("\n----------------------------------------------------------------------\n")
+write_log(paste0("Admission to ICU: Predictions","\n"))
+extract_rma_results(odds_icu_adm)
 
 meta_analyses_icu_adm <- data.frame(
     outcome="ICU admission",
