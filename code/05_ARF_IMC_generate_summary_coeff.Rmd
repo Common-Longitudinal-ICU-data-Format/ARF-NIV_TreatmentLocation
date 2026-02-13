@@ -302,7 +302,7 @@ extract_rma_results <- function(fit){
   
   write_log(sprintf("%-35s %-15s %-15s %-15s", "Term", "Estimate", "se", "p-val"))
   for(i in seq_len(nrow(fit$beta))){
-    write_log(sprintf("%-35s %-15s %-15s %-15s", rownames(fit$beta)[i], as.character(round(fit$se[i], 4)), as.character(round(fit$beta[i], 4)), as.character(round(fit$pval[i], 4))))
+    write_log(sprintf("%-35s %-15s %-15s %-15s", rownames(fit$beta)[i], as.character(round(fit$beta[i], 4)), as.character(round(fit$se[i], 4)), as.character(round(fit$pval[i], 4))))
   }
   
   write_log(paste0("\nTest for Residual Heterogeneity: QE = ", round(fit$QE, 4), ", p-val = ", round(fit$QEp, 4)))
@@ -441,8 +441,7 @@ for (outcome_binary in outcomes_binary){
 rm(model_coefficients, log_odds, risk_diff, icu_pred, ward_pred)
 
 # Add p symbols and remove intercept
-meta_analyses_binary <- add_p_symbols(meta_analyses_binary |>
-                                        filter(covariate != "intrcpt"))
+meta_analyses_binary <- add_p_symbols(meta_analyses_binary)
 
 write_csv(meta_analyses_binary, paste0(global_out_dir, "meta_analyses_binary.csv"))
 
@@ -492,8 +491,7 @@ for (outcome_count in outcomes_counts){
 rm(model_coefficients, prop_odds)
 
 # Add p symbols and remove intercept
-meta_analyses_counts <- add_p_symbols(meta_analyses_counts |>
-                                        filter(covariate != "intrcpt"))
+meta_analyses_counts <- add_p_symbols(meta_analyses_counts)
 
 
 write_csv(meta_analyses_counts, paste0(global_out_dir, "meta_analyses_counts.csv"))
@@ -531,8 +529,7 @@ meta_analyses_icu_adm <- data.frame(
   )
 
 # Add p symbols and remove intercept
-meta_analyses_icu_adm <- add_p_symbols(meta_analyses_icu_adm |>
-                                        filter(covariate != "intrcpt"))
+meta_analyses_icu_adm <- add_p_symbols(meta_analyses_icu_adm)
 
 
 write_csv(meta_analyses_icu_adm, paste0(global_out_dir, "meta_analyses_icu_admission.csv"))
