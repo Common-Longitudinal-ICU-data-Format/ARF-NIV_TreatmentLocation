@@ -535,8 +535,10 @@ meta_analyses_icu_adm <- add_p_symbols(meta_analyses_icu_adm |>
                                         filter(covariate != "intrcpt"))
 
 
-write_csv(meta_analyses_counts, paste0(global_out_dir, "meta_analyses_icu_admission.csv"))
+write_csv(meta_analyses_icu_adm, paste0(global_out_dir, "meta_analyses_icu_admission.csv"))
 
+# Clean R Workspace
+rm(odds_icu_adm)
 ```
 
 # Create histograms of compiled predicted respiratory support free days
