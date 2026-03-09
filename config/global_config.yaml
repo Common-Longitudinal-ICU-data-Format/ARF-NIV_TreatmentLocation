@@ -27,15 +27,15 @@ outcomes_counts:
   - "resp_support_free_days" # measured outcome
   
 covariates:
-  - "age_at_admission"
-  - "is_female"
-  - "first_bmi"
-  - "elixhauser_index"
-  - "code_status_full"
-  - "ph_factor"
-  - "sf_factor"
-  - "worst_non_resp_sofa"
-  - "sepsis_in_ed"
-  - "year"
-  - "season"
+  - "age_sub_65" # Continuous, numeric
+  - "is_female" # Factor; 0, 1
+  - "bmi_sub_30" # Continuous, numeric
+  - "elixhauser_index" # Count, numeric
+  - "code_status_full" # Factor; 0, 1
+  - "ph_factor" # Factor
+  - "sf_factor" # Factor
+  - "worst_non_resp_sofa" # Count, numeric
+  - "sepsis_in_ed" # Factor; 0, 1
+  - "era" # Factor; Post, During, Pre (covid pandemic)
+  - "season" # Factor; Winter, Spring, Summer, Autumn
 

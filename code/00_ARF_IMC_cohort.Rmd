@@ -97,7 +97,7 @@ tic()
 tables <- c("patient", "hospitalization", "vitals", "labs", 
             "medication_admin_continuous", "adt", 
             "patient_assessments", "respiratory_support", "position", 
-            "dialysis", "intake_output", "ecmo_mcs", "procedures", 
+            "dialysis", "intake_output", "ecmo_mcs", "patient_procedures", 
             "admission_diagnosis", "provider", "sensitivity", 
             "medication_orders", "medication_admin_intermittent", 
             "therapy_details", "microbiology_culture", "sensitivity", "microbiology_nonculture", "code_status", "hospital_diagnosis", "crrt_therapy")

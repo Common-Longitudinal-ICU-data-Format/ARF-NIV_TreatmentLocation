@@ -37,3 +37,4 @@ global_model_outputs/
 output/
 config/config.yaml
 .venv
+OLD/
