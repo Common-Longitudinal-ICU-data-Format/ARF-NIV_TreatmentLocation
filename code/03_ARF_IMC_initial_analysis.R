@@ -1,0 +1,850 @@
+# Sarah Goldfarb
+# 01/13/2026
+
+{ # Setup
+  
+  { # Load the Required Packages
+    packages <- c(
+      "tidyverse",
+      "gtsummary",
+      "gt",
+      "yaml",
+      "rprojroot",
+      "icd.data",
+      "rlang"
+    )
+    
+    install_if_missing <- function(package) {
+      if (!require(package, character.only = TRUE)) {
+        install.packages(package, dependencies = TRUE)
+        library(package, character.only = TRUE)
+      }
+    }
+    
+    sapply(packages, install_if_missing)
+    rm(packages, install_if_missing)
+  } # Load the Required Packages
+  
+  { # Load config to specify local paths
+    # Find project root
+    project_root <- find_root(rprojroot::has_dir("config"))
+    
+    # Read YAML config
+    config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+    global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+    
+    # Assign config values to R variables
+    tables_location <- config$tables_location
+    project_location <- config$project_location
+    site <- config$institution
+    site_time_zone <- config$time_zone
+    file_type <- config$file_type
+    
+    # Cutoff for describing hospital as IMC capable
+    IMC_CAPABLE_CUTOFF <- global_config$imc_capable_cutoff
+    
+    # Study start and end
+    STUDY_START <- as.POSIXct(global_config$study_start, tz=site_time_zone) # Start time
+    STUDY_END <- as.POSIXct(global_config$study_end, tz=site_time_zone) # End time
+    
+    rm(config, global_config)
+  } # Load config to specify local paths
+  
+  # Set global variables
+  TRIAGE_COLORS <- c(
+    "ICU" = "red",
+    "IMC" = "purple",
+    "Ward" = "blue"
+  )
+  
+  { # Create folders if needed
+    #Create Sub Folders within Project Folder
+    # Check if the output directory exists; if not, create it
+    if (!dir.exists(paste0(project_location, "/private_tables"))) {
+      dir.create(paste0(project_location, "/private_tables"))
+    }
+    if (!dir.exists(paste0(project_location, "/", site, "_project_output"))) {
+      dir.create(paste0(project_location,"/", site, "_project_output"))
+    }
+    if (!dir.exists(paste0(project_location, "/", site, "_project_output/local_figs_tabs/"))) {
+      dir.create(paste0(project_location,"/", site, "_project_output/local_figs_tabs/"))
+    }
+    
+    # Where to send local figures and tables for viewing locally but not necessary for pooling
+    local_fig_dir <- file.path(project_location, paste0(site, "_project_output/local_figs_tabs/"))
+    
+  } # Create folders if needed
+  
+  { # Reading and reformatting data
+    final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+    no_pandemic_cohort <- read_csv(paste0(project_location, "/private_tables/no_pandemic_one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+    
+    reformat_cohort_cols <- function(df) {
+      
+      # Set order of triage location for foactoring
+      traige_location_factors <- c("ICU", "IMC", "Ward")
+      traige_location_imc_factors <- c("ICU (+)", "ICU (-)", "IMC", "Ward (+)", "Ward (-)")
+      
+      
+      return(df |>
+               mutate(
+                 # Format triage location
+                 triage_location_formatted = case_when(
+                   triage_location == "icu" ~ "ICU",
+                   triage_location == "stepdown" ~ "IMC",
+                   triage_location == "ward" ~ "Ward",
+                   TRUE ~ triage_location),
+                 # Set triage location as factor
+                 triage_location_formatted = factor(triage_location_formatted, levels = traige_location_factors),
+                 # Categorize triage location based on IMC availability
+                 traige_location_imc_avail = case_when(
+                   triage_location_formatted == "ICU" & imc_capable == 1 ~ "ICU (+)",
+                   triage_location_formatted == "ICU" ~ "ICU (-)",
+                   triage_location_formatted == "IMC" ~ "IMC",
+                   triage_location_formatted == "Ward" & imc_capable == 1 ~ "Ward (+)",
+                   triage_location_formatted == "Ward" ~ "Ward (-)",
+                   TRUE ~ triage_location_formatted
+                 ),
+                 # Set triage  as factor
+                 traige_location_imc_avail = factor(traige_location_imc_avail, levels = traige_location_imc_factors),
+                 # Factor race
+                 race_summary = factor(race_summary, levels=c("White", "Black or African American", "Asian", "Other")),
+                 # Factor last NIV device
+                 last_niv_device = factor(last_niv_device, levels=c("NIPPV", "High Flow NC")),
+                 # Factor type of ARF
+                 physiologic_type = factor(physiologic_type, levels=c("Hypoxic", "Hypercapnic", "Mixed", "Neither", "Undefined")),
+                 # Create binary variable if patient is female
+                 is_female = ifelse(tolower(sex_category) == "female", 1, 0),
+                 
+                 
+                 
+                 # Binary variable if patient died or discharged to hospice within 28 days
+                 death_hospice_28 = ifelse(
+                   (in_hosp_death == 1 | hospice == 1) &
+                     as.numeric(difftime(block_end_discharge, niv_start, units = "days")) <= 28,
+                   1, 0
+                 ),
+                 # Binary variable if patient died or discharged to hospice within 60 days
+                 death_hospice_60 = ifelse(
+                   (in_hosp_death == 1 | hospice == 1) &
+                     as.numeric(difftime(block_end_discharge, niv_start, units = "days")) <= 60,
+                   1, 0
+                 ),
+                 # Binary variable if patient had imv (set as NA if patient was DNI)
+                 imv = ifelse(is_dni, NA, ifelse(was_trach == 1 | was_intubated == 1, 1, 0)),
+                 # Binary variable if patient died or discharged to hospice at all
+                 death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
+                 
+                 # Reformat ICD code 9 vs 10
+                 diagnosis_code_format = case_when(
+                   str_detect(diagnosis_code_format, regex(paste0("icd.*9.*"), ignore_case = TRUE)) ~ "icd9",
+                   str_detect(diagnosis_code_format, regex(paste0("icd.*10.*"), ignore_case = TRUE)) ~ "icd10",
+                   TRUE ~ NA_character_
+                 ),
+                 # Reformat ICD codes to remove any non alphanumeric
+                 primary_diagnosis = gsub("[^A-Za-z0-9]", "", primary_diagnosis),
+                 
+                 # Create log10 scale for relevant variables
+                 los_pen_logged = log10(los_penalized),
+                 
+                 # Create a time variable based on presentation date
+                 time_x = as.Date(start_ed)
+                 
+               ))
+    }
+    
+    final_cohort <- reformat_cohort_cols(final_cohort)
+    no_pandemic_cohort <- reformat_cohort_cols(no_pandemic_cohort)
+  } # Reading and reformatting data
+  
+
+  
+} # Setup
+
+{ # Set ICD diagnoses
+  # Store list of all ICD codes using icd package
+  icd_descriptions <- rbind(
+    icd10cm2016[,c("code", "short_desc", "major", "sub_chapter","chapter")] |>
+      mutate(diagnosis_code_format="icd10"),
+    icd9cm_hierarchy[,c("code", "short_desc", "major", "sub_chapter","chapter")]|>
+      mutate(diagnosis_code_format="icd9"))|>
+    # Rename column
+    rename(primary_diagnosis=code) |>
+    # Cast to string for comparison
+    mutate(primary_diagnosis = as.character(primary_diagnosis))
+  
+  # Join diagnosis information with cohort
+  final_cohort <- final_cohort |>
+    left_join(
+      icd_descriptions,
+      by=c("primary_diagnosis", "diagnosis_code_format")
+    )
+  
+  # Create count table for icd chapters
+  icd_count_table <- function(df){
+    icd_counts <- setNames(as.data.frame(table(df$chapter, df$triage_location)), c("icd_chapter", "triage_location", "count")) |> 
+      filter(count>0) |>
+      mutate(count = ifelse(count >= 5, count, "<5"))
+    
+    write.csv(icd_counts,
+              # Set file path
+              paste0(project_location,"/", site, "_project_output/", site, "_icd_table_", site, ".csv"),
+              row.names = FALSE)
+  }
+  
+  
+  icd_count_table(final_cohort)
+} # Set ICD diagnoses
+
+{ # Create functions for stacking summary data
+  
+  summarize_continuous <- function(data, column_name, nickname = NA, include_titles = F, by_column = "triage_location") {
+    
+    # Convert column names to symbols
+    col_symbol <- sym(column_name)
+    by_symbol <- sym(by_column)
+    
+    # Set the nickname to the column name if not specified
+    nickname <- coalesce(nickname, column_name)
+    
+    summary <- data |>
+      summarise(
+        !!paste0("n_", nickname)  := sum(!is.na(!!col_symbol)),
+        !!paste0("mean_", nickname) := mean(!!col_symbol, na.rm = TRUE),
+        !!paste0("sd_", nickname) := sd(!!col_symbol, na.rm = TRUE),
+        !!paste0("median_", nickname) := stats::median(!!col_symbol, na.rm = TRUE),
+        !!paste0("p25_", nickname)    := stats::quantile(!!col_symbol, probs = 0.25, na.rm = TRUE, names = FALSE),
+        !!paste0("p75_", nickname)    := stats::quantile(!!col_symbol, probs = 0.75, na.rm = TRUE, names = FALSE),
+        .by = !!by_symbol
+      )
+    
+    if(include_titles)
+      return(summary |> mutate(site = site) |> relocate(site, .before = 1))
+    return(summary |> select(-by_column))
+  }
+  
+  summarize_categorical <- function(data, column_name, nickname = NA, include_titles = FALSE, by_column = "triage_location") {
+    
+    col_sym <- sym(column_name)
+    by_sym  <- sym(by_column)
+    
+    nickname <- coalesce(nickname, column_name)
+    
+    summary <- data %>%
+      group_by(!!by_sym, !!col_sym) %>%
+      summarise(
+        !!paste0("n_", nickname)   := n(),
+        .groups = "drop"
+      ) |>
+      pivot_wider(
+        names_from  = !!col_sym,
+        values_from = c(!!sym(paste0("n_", nickname))) ,
+        names_glue = paste0(nickname, "_{.name}") 
+      )
+    
+    if(include_titles) 
+      return(summary |> mutate(site=site) |> relocate(site, .before = 1))
+    return(summary |> select(-by_column))
+  }
+  
+} # Create functions for stacking summary data
+
+{ # Create table 1
+  create_tab_1 <- function(df, include_imc_avail){
+    
+    # , continuous_display="mean"
+    # Will save mean (SD) and median (IQR), but display only one
+    
+    ### Create HTML table to view ###
+    
+    # Set the variable to stratify based on
+    if (include_imc_avail == 0) {
+      by_column <- "triage_location_formatted"
+    } else if (include_imc_avail == 1) {
+      by_column <- "traige_location_imc_avail"
+    } else {
+      stop("Error: include_imc_avail must be 0 or 1")
+    }
+    strat_var <- sym(by_column)
+    
+    triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
+    
+    
+    tab_1 <- df |>
+      select(
+        !!strat_var,
+        age_at_admission,
+        is_female,
+        first_bmi,
+        race_summary,
+        elixhauser_count,
+        ed_hours,
+        last_niv_device,
+        niv_on_admission,
+        physiologic_type,
+        sf_value,
+        pf_value,
+        last_fio2,
+        worst_non_resp_sofa,
+        sepsis_in_ed
+      ) |>
+      tbl_summary(
+        by = !!strat_var,
+        statistic = list(
+          all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
+          all_categorical() ~ "{n} ({p}%)"
+        ),
+        label = list(
+          age_at_admission ~ "Age, years, mean (SD); median (IQR)",
+          is_female ~ "Female, n (%)",
+          first_bmi ~ "BMI, mg/kg2, mean (SD); median (IQR)",
+          race_summary ~ "Race, n (%)",
+          elixhauser_count ~ "Elixhauser comorbidity count, mean (SD); median (IQR)",
+          ed_hours ~ "Time in ED, hours, mean (SD); median (IQR)",
+          last_niv_device ~ "Type of NIV, n (%)",
+          niv_on_admission ~ "Requiring NIV on Admission, n (%)",
+          physiologic_type ~ "Physiologic type of ARF, n (%)",
+          sf_value ~ "SF Ratio, mean (SD); median (IQR)",
+          pf_value ~ "PF Ratio, mean (SD); median (IQR)",
+          last_fio2 ~ "FiO2, mean (SD); median (IQR)",
+          worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)",
+          sepsis_in_ed ~ "Sepsis in ED, n (%)"
+        ),
+        missing="ifany"
+      ) |>
+      add_overall(last = TRUE) |>
+      modify_footnote(everything() ~ NA)|>
+      modify_table_body(
+        ~ .x 
+        |>
+          mutate(
+            across(
+              starts_with("stat_"),
+              ~ {
+                denom <- if (cur_column() == "stat_0") nrow(df) else triage_n[as.integer(sub("stat_", "", cur_column()))]
+                ifelse(
+                  label == "Unknown",
+                  paste0(
+                    .x, " (",
+                    round(
+                      100 * suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x))) / denom
+                    ),
+                    "%)"
+                  ),
+                  .x
+                )
+              }
+            )
+          ) |>
+          mutate(label = ifelse(label == "Unknown", "Missing data, n (%)", label))
+      ) |>
+      bold_labels() |>
+      modify_table_styling(
+        columns = everything(),
+        rows = label == "Missing data, n (%)",
+        text_format = "italic")
+    
+    # Save as a viewable HTML
+    tab_1 |>
+      as_gt() |>
+      gtsave(paste0(local_fig_dir, site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    
+    
+    ### Save as CSVs ###
+    
+    # Create single table for all variables
+    tab_1_continuous <- cbind(summarize_continuous(df, "age_at_admission", "age", T, by_column=by_column),
+                              summarize_continuous(df, "first_bmi", "bmi", by_column=by_column),
+                              summarize_continuous(df, "elixhauser_count", "elix", by_column=by_column),
+                              summarize_continuous(df, "ed_hours", by_column=by_column),
+                              summarize_continuous(df, "sf_value", "sf_value", by_column=by_column),
+                              summarize_continuous(df, "pf_value", "pf_value", by_column=by_column),
+                              summarize_continuous(df, "last_fio2", "fio2", by_column=by_column),
+                              summarize_continuous(df, "worst_non_resp_sofa", "sofa", by_column=by_column))
+    
+    # Output continuous to csv
+    write.csv(tab_1_continuous,
+              paste0(
+                project_location,"/", site, "_project_output/", site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"),"_continuous.csv"), 
+              row.names = FALSE)
+    
+    # Create single table for all variables
+    tab_1_catagorical <- cbind(summarize_categorical(df, "race_summary", nickname = "race", include_titles = TRUE, by_column=by_column),
+                               summarize_categorical(df, "sex_category", nickname = "sex", by_column=by_column),
+                               summarize_categorical(df, "last_niv_device", nickname = "last_niv", by_column=by_column),
+                               summarize_categorical(df, "niv_on_admission", nickname = "niv_admiss", by_column=by_column),
+                               summarize_categorical(df, "physiologic_type", nickname = "physiologic_type", by_column=by_column),
+                               summarize_categorical(df, "sepsis_in_ed", nickname = "sepsis_in_ed", by_column=by_column))
+    
+    
+    
+    # Output to csv
+    write.csv(tab_1_catagorical,
+              paste0(
+                project_location,"/", site, "_project_output/", site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"),"_catagorical.csv"), 
+              row.names = FALSE)
+    
+    
+    ### View Results ###
+    return(tab_1)
+  }
+  
+  create_tab_1(final_cohort, 0)
+  create_tab_1(final_cohort, 1)
+  
+} # Create table 1
+
+
+{ # Create table 2
+  
+  create_tab_2 <- function(df, include_imc_avail){
+    
+    ### Create HTML table to view ###
+    
+    # Set the variable to stratify based on
+    if (include_imc_avail == 0) {
+      by_column <- "triage_location_formatted"
+    } else if (include_imc_avail == 1) {
+      by_column <- "traige_location_imc_avail"
+    } else {
+      stop("Error: include_imc_avail must be 0 or 1")
+    }
+    strat_var <- sym(by_column)
+    
+    triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
+    
+    tab_2 <- df |>
+      select(
+        !!strat_var,
+        death_hospice,
+        death_hospice_28,
+        death_hospice_60,
+        los_penalized,
+        resp_support_free_days,
+        imv,
+        was_escalated,
+        organ_failure_yn
+      ) |>
+      tbl_summary(
+        by = !!strat_var,
+        statistic = list(
+          all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
+          all_categorical() ~ "{n} ({p}%)"
+        ),
+        label = list(
+          death_hospice ~ "In-hospital death or discharge to hospice at any time, n (%)",
+          death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
+          death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
+          los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
+          resp_support_free_days ~ "Respiratory support-free days (from first 28 days), days, mean (SD); median (IQR)",
+          imv ~ "Progression to invasive mechanical ventilation, n (%)",
+          was_escalated ~ "Transfer to a higher level of care, n (%)",
+          organ_failure_yn ~ "Composite organ failure, n (%)"
+          # Add stuff for diagnostic codes and discharge location
+        ),
+        missing="ifany"
+      ) |>
+      modify_footnote(everything() ~ NA)|>
+      modify_table_body(
+        ~ .x |>
+          mutate(
+            across(starts_with("stat_"), 
+                   ~ ifelse(label == "Unknown", 
+                            paste0(.x, " (", 
+                                   round(100*
+                                           suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x)))
+                                         /triage_n[as.integer(sub("stat_", "", cur_column()))]),
+                                   "%)"),
+                            .x))
+          ) |>
+          mutate(label = ifelse(label == "Unknown", "Not included due to DNI status at time of admission, n (%)", label))
+      )|>
+      bold_labels() |>
+      modify_table_styling(
+        columns = everything(),
+        rows = label == "Missing data, n (%)",
+        text_format = "italic")
+    
+    # Save as a viewable HTML
+    tab_2 |>
+      as_gt() |>
+      gtsave(paste0(local_fig_dir, site, "_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    
+    
+    ### Save as CSVs ###
+    
+    # Create single table for all variables
+    tab_2_continuous <- cbind(summarize_continuous(df, "los_penalized", "los", T, by_column=by_column),
+                              summarize_continuous(df, "resp_support_free_days", "days_off", by_column=by_column))
+    # Output continuous to csv
+    write.csv(tab_2_continuous,
+              paste0(
+                project_location,"/", site, "_project_output/", site,"_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"),"_continuous.csv"), 
+              row.names = FALSE)
+    
+    # Create single table for all variables
+    tab_2_catagorical <- cbind(summarize_categorical(df, "death_hospice", nickname = "dh", include_titles = TRUE, by_column=by_column),
+                               summarize_categorical(df, "death_hospice_28", nickname = "dh_28", by_column=by_column),
+                               summarize_categorical(df, "death_hospice_60", nickname = "dh_60", by_column=by_column),
+                               summarize_categorical(df, "imv", nickname = "imv", by_column=by_column),
+                               summarize_categorical(df, "was_escalated", nickname = "was_escalated", by_column=by_column),
+                               summarize_categorical(df, "organ_failure_yn", nickname = "organ_failure", by_column=by_column))
+    # Output continuous to csv
+    write.csv(tab_2_catagorical,
+              paste0(
+                project_location,"/", site, "_project_output/", site,"_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"),"_catagorical.csv"), 
+              row.names = FALSE)
+    
+    ### View Results ###
+    return(tab_2)
+  }
+  
+  create_tab_2(final_cohort, 0)
+  create_tab_2(final_cohort, 1)
+  
+} # Create table 2
+
+{ # Create Figure 1: admitting unit proportions by hospital
+  # Summarize admitting unit proportions by hospital
+  hosp_info_tab <- rownames_to_column(as.data.frame.matrix(table(
+    final_cohort |>
+      select(first_hospital_id,triage_location_formatted)
+  )), "hospital") |>
+    mutate(
+      n_total = ICU + IMC + Ward,
+      pct_ICU = ICU/n_total,
+      pct_IMC = IMC/n_total,
+      pct_Ward = Ward/n_total,
+      imc_capable = ifelse(pct_IMC >= IMC_CAPABLE_CUTOFF, 1, 0)
+    ) |>
+    left_join(final_cohort |> 
+                select(hospital=first_hospital_id, hosp_type=first_hospital_type) |>
+                distinct()
+              , by = "hospital") |>
+    arrange(desc(pct_ICU))
+  
+  hosp_info_tab
+  
+  # Output to csv
+  write.csv(hosp_info_tab,
+            paste0(
+              project_location,"/", site, "_project_output/", site, "_fig_1a_data.csv"), 
+            row.names = FALSE)
+  
+  
+  # Plot bar graph
+  
+  # Reshape
+  hosp_info_tab_long <- hosp_info_tab |>
+    select(hospital, ICU, IMC, Ward, n_total) |>
+    pivot_longer(
+      cols = c(ICU, IMC, Ward),
+      names_to = "unit",
+      values_to = "n"
+    ) |>
+    mutate(unit = factor(unit, levels = c("ICU", "IMC", "Ward")),
+           pct = n/n_total
+    )
+  
+  # Actual plot
+  hosp_info_plot <- ggplot(hosp_info_tab_long, aes(x = factor(hospital, levels = unique(hospital)),
+                                                   y = pct,
+                                                   fill = unit)) +
+    geom_bar(stat = "identity", width = 0.9) +
+    scale_fill_manual(values = TRIAGE_COLORS,
+                      name=expression(bold("Admission Unit:"))) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    labs(
+      x = "Hospital",
+      y = "Percent of Admissions",
+      fill = "Unit"
+    ) +
+    theme_classic() +
+    theme(
+      legend.position = "top",
+      legend.direction="horizontal",
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_blank(),   # hides hospital names
+      axis.ticks.x = element_blank()
+    )
+  
+  hosp_info_plot
+  
+  ### Save as jpg to view ###
+  ggsave(paste0(local_fig_dir, site,"_fig_1a.jpg"), 
+         plot=hosp_info_plot, width=6, height=5, dpi=300)
+} # Create Figure 1: admitting unit proportions by hospital
+
+{ # Create temporal graph of admitting patterns
+  plot_temporal_panels <- function(
+    data,
+    fill_column,
+    legend_title,
+    fill_values,
+    panel_num,
+    x_var = "time_x",
+    binwidth_days = 60,
+    x_start = STUDY_START,
+    x_end = STUDY_END,
+    x_breaks_months = 12,
+    plot_width = 8,
+    plot_height = 6,
+    dpi = 300,
+    site_name = site,
+    file_prefix = "fig_2"
+  ) {
+    
+    # Coerce POSIXct -> Date to match x_var
+    x_start_d <- as.Date(x_start)
+    x_end_d   <- as.Date(x_end)
+    
+    # Fixed, global bin edges: same start/stop/width every time
+    # Include the final edge so the last bin is drawn consistently
+    breaks_vec <- seq(from = x_start_d, to = x_end_d + binwidth_days, by = binwidth_days)
+    x_end_limit <- max(breaks_vec)
+    
+    p <- ggplot(data, aes(x = !!sym(x_var), fill = !!sym(fill_column))) +
+      geom_histogram(
+        breaks = breaks_vec,
+        position = "stack",
+        linewidth = 0,
+        boundary = x_start_d,
+        closed = "left"
+      ) +
+      labs(
+        x = "Date",
+        y = "Number of Encounters",
+        fill = legend_title
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.direction = "horizontal",
+        legend.position = "top"
+      ) +
+      scale_fill_manual(values = fill_values) +
+      scale_x_date(
+        limits = c(x_start_d, x_end_limit),
+        expand = c(0, 0),
+        date_labels = "%-m/%Y",
+        breaks = seq(x_start_d, x_end_d, by = paste0(x_breaks_months, " months"))
+      )
+    
+    
+    # Save the image of the plot
+    ggsave(
+      filename = paste0(local_fig_dir, site_name, "_" ,file_prefix, panel_num, "_.jpg"),
+      plot = p,
+      width = plot_width,
+      height = plot_height,
+      dpi = dpi
+    )
+    
+    return(p)
+  }
+  
+  plot_temporal_panels(
+    data = final_cohort,
+    fill_column = "triage_location_formatted",
+    legend_title = "Initial Admission Location",
+    fill_values = TRIAGE_COLORS,
+    panel_num = "a"
+  )
+  
+  plot_temporal_panels(
+    data = final_cohort,
+    fill_column = "last_niv_device",
+    legend_title = "NIV Type",
+    fill_values = c("orange", "cadetblue", "darkgreen"),
+    panel_num = "b"
+  )
+  
+  plot_temporal_panels(
+    data = final_cohort,
+    fill_column = "physiologic_type",
+    legend_title = "Physiologic Type",
+    fill_values = c("lightblue", "plum1", "lavender", "khaki", "grey"),
+    panel_num = "c"
+  )
+  
+  save_temporal_data <- function(
+    data,
+    breaks,
+    fill_column,
+    panel_num,
+    site_name = site,
+    file_prefix = "fig_2"
+  ) {
+    
+    display_results <- data |>
+      select(start_ed, !!sym(fill_column)) |>
+      mutate(
+        time_bin = cut(
+          start_ed,
+          breaks = breaks,
+          include.lowest = TRUE,
+          right = FALSE,        # intervals like [a, b)
+          ordered_result = TRUE
+        )
+      ) |>
+      select(time_bin, !!sym(fill_column))
+    
+    fig_data <- data.frame(table(display_results)) |>
+      arrange(time_bin, !!sym(fill_column)) |>
+      rename(n_patients=Freq) |>
+      # Set to < 5 if fewer than 5 patients for privacy
+      mutate(n_patients = case_when(
+        n_patients == 0 ~ "0",
+        n_patients < 5 ~ "< 5",
+        TRUE ~ as.character(n_patients)
+      ))
+    
+    write.csv(fig_data, paste0(
+      project_location, "/", site, "_project_output/", site, "_", file_prefix, panel_num,"_data.csv"
+    ))
+    
+  }
+  
+  # Build 1-month breakpoints
+  breaks <- seq(STUDY_START, STUDY_END, by = "1 month")
+  
+  # Ensure STUDY_END is included
+  if (tail(breaks, 1) < STUDY_END) {
+    breaks <- c(breaks, STUDY_END)
+  }
+  
+  # Save the data for all fig2 panels
+  
+  save_temporal_data(
+    final_cohort,
+    breaks,
+    "triage_location_formatted",
+    "a"
+  )
+  
+  save_temporal_data(
+    final_cohort,
+    breaks,
+    "last_niv_device",
+    "b"
+  )
+  
+  save_temporal_data(
+    final_cohort,
+    breaks,
+    "physiologic_type",
+    "c"
+  )
+} # Create temporal graph of admitting patterns
+
+
+{ # Create histograms of day count variables
+  MAX_LOS_BIN <- 60
+  
+  histogram_data <- final_cohort |>
+    select(resp_support_free_days, 
+           los_penalized) |>
+    mutate(
+      
+      los_groups = cut(
+        los_penalized,
+        breaks = c(seq(0, MAX_LOS_BIN, by = 5), Inf),
+        right = TRUE,
+        ordered_result = TRUE
+      ),
+      resp_free_days_groups = floor(resp_support_free_days)
+    )
+  
+  los_data_binned <- data.frame(table(histogram_data$los_groups)) |>
+    setNames(c("Days", "Patients")) |>
+    # Set values to be "< 5" if fewer than 5 patients in this outcome for privacy
+    mutate(Patients = case_when(
+      Patients == 0 ~ "0",
+      Patients < 5 ~ "<5",
+      TRUE ~ as.character(Patients)
+    ))
+  
+  resp_free_days_binned <- data.frame(table(histogram_data$resp_free_days_groups))|>
+    setNames(c("Days", "Patients"))|>
+    # Set values to be "< 5" if fewer than 5 patients in this outcome for privacy
+    mutate(Patients = case_when(
+      Patients == 0 ~ "0",
+      Patients < 5 ~ "<5",
+      TRUE ~ as.character(Patients)
+    ))
+  
+  # Output to csv
+  write.csv(los_data_binned,
+            paste0(
+              project_location,"/", site, "_project_output/", site,"_los_data_binned.csv"), 
+            row.names = FALSE)
+  write.csv(resp_free_days_binned,
+            paste0(
+              project_location,"/", site, "_project_output/", site,"_resp_free_days_binned.csv"), 
+            row.names = FALSE)
+  
+  los_histogram <- ggplot(los_data_binned |>
+                            mutate(Patients = case_when(
+                              Patients == "< 5" ~ 0,
+                              TRUE ~ as.numeric(Patients)
+                            )
+                            ), aes(x = Days, y = Patients, group = 1)) +
+    geom_col(width = 1) +
+    theme_minimal() +
+    labs(title="Length of Stay")
+  
+  resp_free_histogram <- ggplot(resp_free_days_binned |>
+                                  mutate(Patients = case_when(
+                                    Patients == "< 5" ~ 0,
+                                    TRUE ~ as.numeric(Patients)
+                                  )
+                                  ), aes(x = Days, y = Patients, group = 1)) +
+    geom_col(width = 1) +
+    theme_minimal() +
+    labs(title="Number of Respiratory Support-Free Days")
+  
+  # Save the image of the plot
+  ggsave(
+    filename = paste0(local_fig_dir, site, "_los_histogram.jpg"),
+    plot = los_histogram,
+    width = 7,
+    height = 5,
+    dpi = 300
+  )
+  ggsave(
+    filename = paste0(local_fig_dir, site, "_resp_free_histogram.jpg"),
+    plot = resp_free_histogram,
+    width = 7,
+    height = 5,
+    dpi = 300
+  )
+  
+} # Create histograms of day count variables
+
+{ # Output which hospitals have which types of units
+  hospital_data <- final_cohort |>
+    group_by(first_hospital_id) |>
+    summarise(
+      n_patients = n(),
+      imc_capable = first(imc_capable),
+      academic_community = first(first_hospital_type)
+    )
+  # Output to csv
+  write.csv(hospital_data,
+            paste0(
+              project_location,"/", site, "_project_output/", site,"_hospital_data.csv"), 
+            row.names = FALSE)
+  
+  # Output to csv
+  write.csv(no_pandemic_cohort |>
+              group_by(first_hospital_id) |>
+              summarise(
+                n_patients = n(),
+                imc_capable = first(imc_capable),
+                academic_community = first(first_hospital_type)
+              ),
+            paste0(
+              project_location,"/", site, "_project_output/sensitivity_analysis/", site,"_no_covid_hospital_data.csv"), 
+            row.names = FALSE)
+  
+} # Output which hospitals have which types of units
