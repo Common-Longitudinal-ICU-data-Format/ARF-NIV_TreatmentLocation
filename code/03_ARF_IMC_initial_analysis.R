@@ -736,7 +736,6 @@
   )
 } # Create temporal graph of admitting patterns
 
-
 { # Create histograms of day count variables
   MAX_LOS_BIN <- 60
   
