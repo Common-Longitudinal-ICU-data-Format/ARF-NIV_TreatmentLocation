@@ -394,7 +394,6 @@
   
 } # Create table 1
 
-
 { # Create table 2
   
   create_tab_2 <- function(df, include_imc_avail){
