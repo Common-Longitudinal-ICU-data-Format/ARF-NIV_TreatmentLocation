@@ -195,12 +195,16 @@ units <- c("icu", "ward", "stepdown")
             meta.fit = rma.uni(na.omit(beta_list[,i]), na.omit(beta_error_list[,i])^2)
             summary_coeff[i] <- meta.fit[["beta"]][,1]
           }
+          ### Added names here
+          names(summary_coeff)<- colnames(beta_list)
+          ###
           summary_coeff_all[[outcome_i]][[unit_i]] <- summary_coeff
         }
       }
       return(summary_coeff_all)
     }
     
+    # Find way to order the outputted results so they are not just 21 numbers
     meta_hosp <- run_meta_regression(lists_by_hosp)
     meta_imc <- run_meta_regression(lists_by_imc)
     

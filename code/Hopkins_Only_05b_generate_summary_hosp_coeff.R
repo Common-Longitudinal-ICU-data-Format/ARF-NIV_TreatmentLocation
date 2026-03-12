@@ -147,10 +147,12 @@ units <- c("icu", "ward", "stepdown")
           # Remove NAs
           drop_na()
         
-        gamma_met_reg_new <- rma.uni(yi=gamma, 
-                                     vi=gamma_error^2, 
-                                     mods = ~ imc_capable+academic_community, 
+        gamma_met_reg_new <- rma.uni(yi=gamma,
+                                     vi=gamma_error^2,
+                                     #mods = ~ academic_community,
+                                     mods = ~ imc_capable+academic_community,
                                      data=matched_df)
+        
         
         gamma_BLUPs[[outcome_i]][[unit_i]] <- data.frame(
           first_hospital_id = unique(matched_df$first_hospital_id),

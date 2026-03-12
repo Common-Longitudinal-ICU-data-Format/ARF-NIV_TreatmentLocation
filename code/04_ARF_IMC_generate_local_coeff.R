@@ -415,7 +415,32 @@
         cat(paste0(" Complete!\n"))
       }
     }
-    return(model_coefficients)
+    
+    if(nrow(model_coefficients>0))
+      return(model_coefficients)
+    
+    return(
+      data.frame(
+        site = site,
+        hospital = NA_character_,
+        imc_capable = NA,
+        academic_community = NA_character_,
+        outcome=NA_character_,
+        beta=NA,
+        beta_error=NA,
+        n_obs=NA,
+        p_value=NA,
+        risk_difference=NA,
+        risk_difference_error=NA,
+        risk_difference_p=NA,
+        prediction_icu=NA,
+        prediction_icu_error=NA,
+        prediction_icu_p=NA,
+        prediction_non_icu=NA,
+        prediction_non_icu_error=NA,
+        prediction_non_icu_p=NA
+      )
+    )
   }
   
   # Run and save
@@ -784,6 +809,6 @@
                                                  hospital_data, 
                                                  locations_incl=c("icu", "stepdown"))
   
-  write_csv(model_coefficients_old, paste0(model_out_dir, site,
+  write_csv(model_coefficients_imc_icu, paste0(model_out_dir, site,
                                            "_imc_v_icu_logit_model_coefficients.csv"))
 } # Compare outcomes between icu vs imc at imc-capable hospitals

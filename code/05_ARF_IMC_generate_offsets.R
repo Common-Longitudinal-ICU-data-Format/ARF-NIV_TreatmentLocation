@@ -297,6 +297,8 @@ units <- c("icu", "ward", "stepdown")
               os = as.matrix(model_data |>
                                # Select only covairate cols
                                select(cov_names) |>
+                               # Convert to character (must do before numeric)
+                               mutate(across(everything(), as.character)) |>
                                # Convert to numeric
                                mutate(across(everything(), as.numeric))
               ) %*% 
