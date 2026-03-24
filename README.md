@@ -29,45 +29,51 @@ To run this code, you must also be able to run R and Python and have clify insta
 
 ## Instructions
 
+**STAGE 1:**
+
 1. Rename `config/config_template.yaml` to `config/config.yaml` with site-specific details
 
-2. Run the local code files
+2. Install `uv` (if not already installed) and sync:
+   
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   uv sync
+   ```
+   
+3. Run pipeline for the first time:
+   
+   For MacOS/Linux: 
+   ```bash
+   chmod +x run_pipeline.sh
+   ./run_pipeline.sh
+   ```
+   
+   For Windows: 
+   ```bash
+   run_pipeline.bat
+   ```
+   
+   At this stage, select "1" when prompted for round number
 
-   1. Run `code/00_ARF_IMC_cohort.Rmd`
+4. Upload results, `[sitename]_project_output`, to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)
 
-   2. To run `code/01_ARF_IMC_sepsis_indicators.py`:
+5. Wait for Hopkins to pool the local coefficients to generate global coefficients
 
-      1. Install `uv` (if not already installed):
+**Stage 2**
 
-         ```bash
-         curl -LsSf https://astral.sh/uv/install.sh | sh
-         ```
+1. Pull from the GitHub repo to update global coefficients
 
-      2. Sync the Python environment and install dependencies:
+2. Call run_pipeline as described above, but selecting "2" when prompted for round number
 
-         ```bash
-         uv sync
-         ```
+3. Upload results, `[sitename]_project_output`, to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)
 
-      3. Run the script:
+4. Wait for Hopkins to pool the local intercepts to generate global intercepts
 
-         ```bash
-         uv run code/01_ARF_IMC_sepsis_indicators.py
-         ```
+**Stage 3**
 
-   3. Run `code/02_ARF_IMC_stratification.Rmd`
+1. Pull from the GitHub repo to update global intercepts
 
-   4. Run `code/03_ARF_IMC_initial_analysis.Rmd`
+2. Call run_pipeline as described above, but selecting "3" when prompted for round number
 
-   5. Run `code/04_ARF_IMC_generate_local_coeff.Rmd`
-
-3. Wait for Hopkins to pool the local coefficients to generate global coefficients
-
-4. Pull from the GitHub repo to update global coefficients
-
-5. Run the remaining code, starting at  
-   `code/06_ARF_IMC_apply_summary_coeff.Rmd`
-
-## Expected Results
-In running the code, each site will produce two folders: `private_tables` and `[sitename]_project_output`. `private_tables` is NOT to be shared, as it includes patient row-level data for local analysis. When completed your analysis, please upload `[sitename]_project_output` to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000).
-
+3. Upload results, `[sitename]_project_output`, to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)
