@@ -26,6 +26,7 @@
   } # Load the Required Packages
   
   { # Load config to specify local paths
+    cat("Load config to specify local paths\n")
     # Find project root
     project_root <- find_root(rprojroot::has_dir("config"))
     
@@ -58,6 +59,7 @@
   )
   
   { # Create folders if needed
+    cat("Create folders if needed\n")
     #Create Sub Folders within Project Folder
     # Check if the output directory exists; if not, create it
     if (!dir.exists(paste0(project_location, "/private_tables"))) {
@@ -76,6 +78,7 @@
   } # Create folders if needed
   
   { # Reading and reformatting data
+    cat("Read in data\n")
     final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
     no_pandemic_cohort <- read_csv(paste0(project_location, "/private_tables/no_pandemic_one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
     
@@ -162,6 +165,7 @@
 } # Setup
 
 { # Set ICD diagnoses
+  cat("ICD diagnoses\n")
   # Store list of all ICD codes using icd package
   icd_descriptions <- rbind(
     icd10cm2016[,c("code", "short_desc", "major", "sub_chapter","chapter")] |>
@@ -207,20 +211,21 @@
     # Set the nickname to the column name if not specified
     nickname <- coalesce(nickname, column_name)
     
-    summary <- data |>
+    summary <- data %>%
+      group_by(across(all_of(by_column))) %>%
       summarise(
-        !!paste0("n_", nickname)  := sum(!is.na(!!col_symbol)),
-        !!paste0("mean_", nickname) := mean(!!col_symbol, na.rm = TRUE),
-        !!paste0("sd_", nickname) := sd(!!col_symbol, na.rm = TRUE),
-        !!paste0("median_", nickname) := stats::median(!!col_symbol, na.rm = TRUE),
-        !!paste0("p25_", nickname)    := stats::quantile(!!col_symbol, probs = 0.25, na.rm = TRUE, names = FALSE),
-        !!paste0("p75_", nickname)    := stats::quantile(!!col_symbol, probs = 0.75, na.rm = TRUE, names = FALSE),
-        .by = !!by_symbol
+        !!paste0("n_", nickname)    := sum(!is.na(.data[[column_name]])),
+        !!paste0("mean_", nickname) := mean(.data[[column_name]], na.rm = TRUE),
+        !!paste0("sd_", nickname)   := sd(.data[[column_name]], na.rm = TRUE),
+        !!paste0("median_", nickname) := stats::median(.data[[column_name]], na.rm = TRUE),
+        !!paste0("p25_", nickname)  := stats::quantile(.data[[column_name]], probs = 0.25, na.rm = TRUE, names = FALSE),
+        !!paste0("p75_", nickname)  := stats::quantile(.data[[column_name]], probs = 0.75, na.rm = TRUE, names = FALSE),
+        .groups = "drop"
       )
     
     if(include_titles)
       return(summary |> mutate(site = site) |> relocate(site, .before = 1))
-    return(summary |> select(-by_column))
+    return(summary |> select(-all_of(by_column)))
   }
   
   summarize_categorical <- function(data, column_name, nickname = NA, include_titles = FALSE, by_column = "triage_location") {
@@ -230,26 +235,30 @@
     
     nickname <- coalesce(nickname, column_name)
     
+    tmp_col <- ".tmp_for_pivot"
+    
     summary <- data %>%
-      group_by(!!by_sym, !!col_sym) %>%
-      summarise(
-        !!paste0("n_", nickname)   := n(),
-        .groups = "drop"
-      ) |>
+      rename(!!tmp_col := all_of(column_name)) %>%
+      group_by(across(all_of(by_column)), .data[[tmp_col]]) %>%
+      summarise(n = n(), .groups = "drop") %>%
       pivot_wider(
-        names_from  = !!col_sym,
-        values_from = c(!!sym(paste0("n_", nickname))) ,
-        names_glue = paste0(nickname, "_{.name}") 
+        names_from = !!sym(tmp_col),
+        values_from = n,
+        names_prefix = paste0(nickname, "_"),
+        values_fill = 0
       )
     
     if(include_titles) 
       return(summary |> mutate(site=site) |> relocate(site, .before = 1))
-    return(summary |> select(-by_column))
+    return(summary |> select(-all_of(by_column)))
   }
   
 } # Create functions for stacking summary data
 
 { # Create table 1
+  
+  cat("Table 1\n")
+  
   create_tab_1 <- function(df, include_imc_avail){
     
     # , continuous_display="mean"
@@ -265,90 +274,93 @@
     } else {
       stop("Error: include_imc_avail must be 0 or 1")
     }
-    strat_var <- sym(by_column)
+    #strat_var <- sym(by_column)
+    #triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
     
-    triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
-    
-    
-    tab_1 <- df |>
-      select(
-        !!strat_var,
-        age_at_admission,
-        is_female,
-        first_bmi,
-        race_summary,
-        elixhauser_count,
-        ed_hours,
-        last_niv_device,
-        niv_on_admission,
-        physiologic_type,
-        sf_value,
-        pf_value,
-        last_fio2,
-        worst_non_resp_sofa,
-        sepsis_in_ed
-      ) |>
-      tbl_summary(
-        by = !!strat_var,
-        statistic = list(
-          all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
-          all_categorical() ~ "{n} ({p}%)"
-        ),
-        label = list(
-          age_at_admission ~ "Age, years, mean (SD); median (IQR)",
-          is_female ~ "Female, n (%)",
-          first_bmi ~ "BMI, mg/kg2, mean (SD); median (IQR)",
-          race_summary ~ "Race, n (%)",
-          elixhauser_count ~ "Elixhauser comorbidity count, mean (SD); median (IQR)",
-          ed_hours ~ "Time in ED, hours, mean (SD); median (IQR)",
-          last_niv_device ~ "Type of NIV, n (%)",
-          niv_on_admission ~ "Requiring NIV on Admission, n (%)",
-          physiologic_type ~ "Physiologic type of ARF, n (%)",
-          sf_value ~ "SF Ratio, mean (SD); median (IQR)",
-          pf_value ~ "PF Ratio, mean (SD); median (IQR)",
-          last_fio2 ~ "FiO2, mean (SD); median (IQR)",
-          worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)",
-          sepsis_in_ed ~ "Sepsis in ED, n (%)"
-        ),
-        missing="ifany"
-      ) |>
-      add_overall(last = TRUE) |>
-      modify_footnote(everything() ~ NA)|>
-      modify_table_body(
-        ~ .x 
-        |>
-          mutate(
-            across(
-              starts_with("stat_"),
-              ~ {
-                denom <- if (cur_column() == "stat_0") nrow(df) else triage_n[as.integer(sub("stat_", "", cur_column()))]
-                ifelse(
-                  label == "Unknown",
-                  paste0(
-                    .x, " (",
-                    round(
-                      100 * suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x))) / denom
-                    ),
-                    "%)"
-                  ),
-                  .x
-                )
-              }
-            )
-          ) |>
-          mutate(label = ifelse(label == "Unknown", "Missing data, n (%)", label))
-      ) |>
-      bold_labels() |>
-      modify_table_styling(
-        columns = everything(),
-        rows = label == "Missing data, n (%)",
-        text_format = "italic")
-    
-    # Save as a viewable HTML
-    tab_1 |>
-      as_gt() |>
-      gtsave(paste0(local_fig_dir, site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
-    
+    # df_tab <- df
+    # df_tab$.strat <- df_tab[[by_column]]
+    # triage_n <- as.numeric(table(df_tab$.strat))
+    # 
+    # 
+    # tab_1 <- df_tab |>
+    #   select(
+    #     .strat,
+    #     age_at_admission,
+    #     is_female,
+    #     first_bmi,
+    #     race_summary,
+    #     elixhauser_count,
+    #     ed_hours,
+    #     last_niv_device,
+    #     niv_on_admission,
+    #     physiologic_type,
+    #     sf_value,
+    #     pf_value,
+    #     last_fio2,
+    #     worst_non_resp_sofa,
+    #     sepsis_in_ed
+    #   ) |>
+    #   tbl_summary(
+    #     by = .strat,
+    #     statistic = list(
+    #       all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
+    #       all_categorical() ~ "{n} ({p}%)"
+    #     ),
+    #     label = list(
+    #       age_at_admission ~ "Age, years, mean (SD); median (IQR)",
+    #       is_female ~ "Female, n (%)",
+    #       first_bmi ~ "BMI, mg/kg2, mean (SD); median (IQR)",
+    #       race_summary ~ "Race, n (%)",
+    #       elixhauser_count ~ "Elixhauser comorbidity count, mean (SD); median (IQR)",
+    #       ed_hours ~ "Time in ED, hours, mean (SD); median (IQR)",
+    #       last_niv_device ~ "Type of NIV, n (%)",
+    #       niv_on_admission ~ "Requiring NIV on Admission, n (%)",
+    #       physiologic_type ~ "Physiologic type of ARF, n (%)",
+    #       sf_value ~ "SF Ratio, mean (SD); median (IQR)",
+    #       pf_value ~ "PF Ratio, mean (SD); median (IQR)",
+    #       last_fio2 ~ "FiO2, mean (SD); median (IQR)",
+    #       worst_non_resp_sofa ~ "Non-Respiratory Sofa, mean (SD); median (IQR)",
+    #       sepsis_in_ed ~ "Sepsis in ED, n (%)"
+    #     ),
+    #     missing="ifany"
+    #   ) |>
+    #   add_overall(last = TRUE) |>
+    #   modify_footnote(everything() ~ NA)|>
+    #   modify_table_body(
+    #     ~ .x 
+    #     |>
+    #       mutate(
+    #         across(
+    #           starts_with("stat_"),
+    #           ~ {
+    #             denom <- if (cur_column() == "stat_0") nrow(df) else triage_n[as.integer(sub("stat_", "", cur_column()))]
+    #             ifelse(
+    #               label == "Unknown",
+    #               paste0(
+    #                 .x, " (",
+    #                 round(
+    #                   100 * suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x))) / denom
+    #                 ),
+    #                 "%)"
+    #               ),
+    #               .x
+    #             )
+    #           }
+    #         )
+    #       ) |>
+    #       mutate(label = ifelse(label == "Unknown", "Missing data, n (%)", label))
+    #   ) |>
+    #   bold_labels() |>
+    #   modify_table_styling(
+    #     columns = everything(),
+    #     rows = label == "Missing data, n (%)",
+    #     text_format = "italic")
+    # 
+    # # Save as a viewable HTML
+    # tab_1 |>
+    #   as_gt() |>
+    #   gtsave(paste0(local_fig_dir, site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    # 
     
     ### Save as CSVs ###
     
@@ -384,9 +396,6 @@
                 project_location,"/", site, "_project_output/", site,"_tab_1_", ifelse(include_imc_avail == 0, "3group", "5group"),"_catagorical.csv"), 
               row.names = FALSE)
     
-    
-    ### View Results ###
-    return(tab_1)
   }
   
   create_tab_1(final_cohort, 0)
@@ -395,6 +404,8 @@
 } # Create table 1
 
 { # Create table 2
+  
+  cat("Table 2\n")
   
   create_tab_2 <- function(df, include_imc_avail){
     
@@ -408,67 +419,71 @@
     } else {
       stop("Error: include_imc_avail must be 0 or 1")
     }
-    strat_var <- sym(by_column)
+    #strat_var <- sym(by_column)
     
-    triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
-    
-    tab_2 <- df |>
-      select(
-        !!strat_var,
-        death_hospice,
-        death_hospice_28,
-        death_hospice_60,
-        los_penalized,
-        resp_support_free_days,
-        imv,
-        was_escalated,
-        organ_failure_yn
-      ) |>
-      tbl_summary(
-        by = !!strat_var,
-        statistic = list(
-          all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
-          all_categorical() ~ "{n} ({p}%)"
-        ),
-        label = list(
-          death_hospice ~ "In-hospital death or discharge to hospice at any time, n (%)",
-          death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
-          death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
-          los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
-          resp_support_free_days ~ "Respiratory support-free days (from first 28 days), days, mean (SD); median (IQR)",
-          imv ~ "Progression to invasive mechanical ventilation, n (%)",
-          was_escalated ~ "Transfer to a higher level of care, n (%)",
-          organ_failure_yn ~ "Composite organ failure, n (%)"
-          # Add stuff for diagnostic codes and discharge location
-        ),
-        missing="ifany"
-      ) |>
-      modify_footnote(everything() ~ NA)|>
-      modify_table_body(
-        ~ .x |>
-          mutate(
-            across(starts_with("stat_"), 
-                   ~ ifelse(label == "Unknown", 
-                            paste0(.x, " (", 
-                                   round(100*
-                                           suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x)))
-                                         /triage_n[as.integer(sub("stat_", "", cur_column()))]),
-                                   "%)"),
-                            .x))
-          ) |>
-          mutate(label = ifelse(label == "Unknown", "Not included due to DNI status at time of admission, n (%)", label))
-      )|>
-      bold_labels() |>
-      modify_table_styling(
-        columns = everything(),
-        rows = label == "Missing data, n (%)",
-        text_format = "italic")
-    
-    # Save as a viewable HTML
-    tab_2 |>
-      as_gt() |>
-      gtsave(paste0(local_fig_dir, site, "_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
-    
+    #triage_n <- as.numeric(table(df[[as_string(strat_var)]]))
+    # 
+    # df_tab <- df
+    # df_tab$.strat <- df_tab[[by_column]]
+    # triage_n <- as.numeric(table(df_tab$.strat))
+    # 
+    # tab_2 <- df_tab |>
+    #   select(
+    #     .strat,
+    #     death_hospice,
+    #     death_hospice_28,
+    #     death_hospice_60,
+    #     los_penalized,
+    #     resp_support_free_days,
+    #     imv,
+    #     was_escalated,
+    #     organ_failure_yn
+    #   ) |>
+    #   tbl_summary(
+    #     by = .strat,
+    #     statistic = list(
+    #       all_continuous() ~ "{mean} ({sd}); {median} [{p25}, {p75}]",
+    #       all_categorical() ~ "{n} ({p}%)"
+    #     ),
+    #     label = list(
+    #       death_hospice ~ "In-hospital death or discharge to hospice at any time, n (%)",
+    #       death_hospice_28 ~ "In-hospital death or discharge to hospice within 28 days of starting NIV, n (%)",
+    #       death_hospice_60 ~ "In-hospital death or discharge to hospice within 60 days of starting NIV, n (%)",
+    #       los_penalized ~ "Length of stay, days, mean (SD); median (IQR)",
+    #       resp_support_free_days ~ "Respiratory support-free days (from first 28 days), days, mean (SD); median (IQR)",
+    #       imv ~ "Progression to invasive mechanical ventilation, n (%)",
+    #       was_escalated ~ "Transfer to a higher level of care, n (%)",
+    #       organ_failure_yn ~ "Composite organ failure, n (%)"
+    #       # Add stuff for diagnostic codes and discharge location
+    #     ),
+    #     missing="ifany"
+    #   ) |>
+    #   modify_footnote(everything() ~ NA)|>
+    #   modify_table_body(
+    #     ~ .x |>
+    #       mutate(
+    #         across(starts_with("stat_"), 
+    #                ~ ifelse(label == "Unknown", 
+    #                         paste0(.x, " (", 
+    #                                round(100*
+    #                                        suppressWarnings(as.numeric(gsub("[^0-9.]", "", .x)))
+    #                                      /triage_n[as.integer(sub("stat_", "", cur_column()))]),
+    #                                "%)"),
+    #                         .x))
+    #       ) |>
+    #       mutate(label = ifelse(label == "Unknown", "Not included due to DNI status at time of admission, n (%)", label))
+    #   )|>
+    #   bold_labels() |>
+    #   modify_table_styling(
+    #     columns = everything(),
+    #     rows = label == "Missing data, n (%)",
+    #     text_format = "italic")
+    # 
+    # # Save as a viewable HTML
+    # tab_2 |>
+    #   as_gt() |>
+    #   gtsave(paste0(local_fig_dir, site, "_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"), ".html"))
+    # 
     
     ### Save as CSVs ###
     
@@ -494,8 +509,6 @@
                 project_location,"/", site, "_project_output/", site,"_tab_2_", ifelse(include_imc_avail == 0, "3group", "5group"),"_catagorical.csv"), 
               row.names = FALSE)
     
-    ### View Results ###
-    return(tab_2)
   }
   
   create_tab_2(final_cohort, 0)
@@ -504,6 +517,7 @@
 } # Create table 2
 
 { # Create Figure 1: admitting unit proportions by hospital
+  cat("Admitting unit proportions by hospital Figure\n")
   # Summarize admitting unit proportions by hospital
   hosp_info_tab <- rownames_to_column(as.data.frame.matrix(table(
     final_cohort |>
@@ -575,6 +589,9 @@
 } # Create Figure 1: admitting unit proportions by hospital
 
 { # Create temporal graph of admitting patterns
+  
+  cat("Temportal graphs\n")
+  
   plot_temporal_panels <- function(
     data,
     fill_column,
@@ -737,6 +754,7 @@
 } # Create temporal graph of admitting patterns
 
 { # Create histograms of day count variables
+  cat("Creating histograms\n")
   MAX_LOS_BIN <- 60
   
   histogram_data <- final_cohort |>
@@ -820,6 +838,7 @@
 } # Create histograms of day count variables
 
 { # Output which hospitals have which types of units
+  cat("Output hosp_data\n")
   hospital_data <- final_cohort |>
     group_by(first_hospital_id) |>
     summarise(

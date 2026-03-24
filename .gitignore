@@ -39,3 +39,5 @@ config/config.yaml
 .venv
 OLD/
 compiled_final_results/
+logs/
+code/output/

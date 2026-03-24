@@ -15,8 +15,8 @@ units <- c("icu", "ward", "stepdown")
       "marginaleffects",
       "ordinal",
       "broom",
-      "logistf",
-      "ridge"
+      "logistf"#,
+      #"ridge"
     )
     
     install_if_missing <- function(package) {
@@ -31,6 +31,7 @@ units <- c("icu", "ward", "stepdown")
   } # Load needed packages
   
   { # Load config to specify local paths
+    cat("Load config to specify local paths\n")
     # Find project root
     project_root <- find_root(rprojroot::has_dir("config"))
     
@@ -52,6 +53,7 @@ units <- c("icu", "ward", "stepdown")
   } # Load config to specify local paths
   
   { # Create folders if needed
+    cat("Create folders if needed\n")
     # Check if the output directory exists; if not, create it
     if (!dir.exists(paste0(project_location, "/private_tables"))) {
       dir.create(paste0(project_location, "/private_tables"))
@@ -67,6 +69,7 @@ units <- c("icu", "ward", "stepdown")
   } # Create folders if needed
   
   { # Reading in data
+    cat("Reading in data\n")
     final_cohort <- read_csv(paste0(
       project_location, 
       "/private_tables/model_data.csv"), 
@@ -96,6 +99,8 @@ units <- c("icu", "ward", "stepdown")
 
 { # Calculate event rate
   
+  cat("Calculating event rate\n")
+  
   all_event_rates <- data.frame(
     outcome=character(),
     unit=character(),
@@ -107,8 +112,9 @@ units <- c("icu", "ward", "stepdown")
   )
   
   for(outcome_i in outcomes_binary){
+    cat(paste0("> For outcome = ", outcome_i, "\n"))
     for(unit_i in units){
-      
+        cat(paste0("     > In unit = ", unit_i, "\n"))
       counterfactual_data <- final_cohort |>
         filter(triage_location==unit_i) |>
         select(first_hospital_id,
@@ -137,6 +143,7 @@ units <- c("icu", "ward", "stepdown")
       
       # Iterate over each local hospital
       for(ind in c(1:n_hosp_local)){
+        cat(paste0("          > At local hospital = ", hosp_ids_local[ind], "\n"))
         # Subset to only data at this hospital
         counterfactual_data_hosp <- counterfactual_data |>
           filter(first_hospital_id == hosp_ids_local[ind]) |>
@@ -148,6 +155,7 @@ units <- c("icu", "ward", "stepdown")
         
         # Iterate over each CLIF hospital
         for(k in c(1:n_hosp_CLIF)){
+          cat(paste0("               > At CLIF hospital = ", hosp_ids_CLIF[k], "\n"))
           # Hospital effect at THIS clif hospital
           gamma_i <- hospital_effect[k]
           
@@ -179,7 +187,10 @@ units <- c("icu", "ward", "stepdown")
     }
   }
   
+  cat("Event rates saved... saving output...\n")
   write_csv(all_event_rates, paste0(project_location, site,"_project_output/local_model_outputs/",
                                     site, "_all_event_rates.csv"))
+
+  cat("Run successfully!\n")
   
 } # Calculate event rate

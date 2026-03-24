@@ -13,8 +13,8 @@
     "marginaleffects",
     "ordinal",
     "broom",
-    "logistf",
-    "ridge"
+    "logistf"#,
+    #"ridge"
   )
   
   install_if_missing <- function(package) {
@@ -29,6 +29,7 @@
   } # Load needed packages
   
   { # Load config to specify local paths
+    cat("Load config to specify local paths\n")
     # Find project root
     project_root <- find_root(rprojroot::has_dir("config"))
     
@@ -50,6 +51,7 @@
   } # Load config to specify local paths
   
   { # Create folders if needed
+    cat("Create folders if needed\n")
     # Check if the output directory exists; if not, create it
     if (!dir.exists(paste0(project_location, "/private_tables"))) {
       dir.create(paste0(project_location, "/private_tables"))
@@ -65,8 +67,9 @@
   } # Create folders if needed
   
   { # Reading in and reformatting data
-  final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
-  reformat_cohort_cols <- function(df) {
+    cat("Read in data\n")
+    final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
+    reformat_cohort_cols <- function(df) {
     
     # Set order of triage location for foactoring
     traige_location_factors <- c("ICU", "IMC", "Ward")
@@ -178,7 +181,7 @@
 } # Setup
 
 { # Report covariate distributions, stratified
-  
+  cat("Report covariate distributions, stratified\n")
   # Returns a list of two dfs:distributions for categorical and continuous covariates
   get_covariate_distributions <- function(cohort_data, strat_var = "first_hospital_id"){
     
@@ -306,6 +309,7 @@
 } # Report covariate distributions, stratified
 
 { # Run logit models (old)
+  cat("Run logit models (old)\n")
   run_logit_models_old <- function(cohort_data, hosp_data, locations_incl=c("icu", "ward")){
     
     # Remove IMC patients and add indicator if admitted to ICU
@@ -452,6 +456,7 @@
 
 { # Run direct standardization to obtain local coefficients
   
+  cat("Run direct standardization to obtain local coefficients\n")
   # Returns df of estimates for each term, with standard error
   run_direct_standardization <- function(cohort_data, hosp_data, strat_var){
     
@@ -700,6 +705,7 @@
 } # Run direct standardization to obtain local coefficients
 
 { # Run process outcome of ICU admission
+  cat("Run process outcome of ICU admission\n")
   run_secondary_models <- function(cohort_data, hosp_data){
     
     # KEEP IMC patients for the secondary analysis
@@ -804,11 +810,84 @@
 
 { # Compare outcomes between icu vs imc at imc-capable hospitals
   
-  # Run and save
-  model_coefficients_imc_icu <- run_logit_models_old(final_cohort, 
-                                                 hospital_data, 
-                                                 locations_incl=c("icu", "stepdown"))
+  cat("Compare outcomes between ICU vs IMC at relevant hospitals\n")
   
-  write_csv(model_coefficients_imc_icu, paste0(model_out_dir, site,
-                                           "_imc_v_icu_logit_model_coefficients.csv"))
+  { # Logit method
+    # Run and save
+    model_coefficients_imc_icu <- run_logit_models_old(final_cohort, 
+                                                       hospital_data, 
+                                                       locations_incl=c("icu", "stepdown"))
+    
+    write_csv(model_coefficients_imc_icu, paste0(model_out_dir, site,
+                                                 "_imc_v_icu_logit_model_coefficients.csv"))
+  } # Logit method
+  
+  { # Direct standardization method
+    # icu_imc_direct_stand <- function(cohort_data, hosp_data){
+    #   
+    #   # Initialize the model output dataframe
+    #   model_output <- data.frame(
+    #     site = character(),
+    #     hospital = character(),
+    #     outcome=character(),
+    #     term=character(),
+    #     estimate=numeric(),
+    #     std.error=numeric(),
+    #     p.value=numeric(),
+    #     n.obs=integer(),
+    #     stringsAsFactors = FALSE
+    #   )
+    #   
+    #   for(outcome_i in outcomes_binary){
+    #     model_equation <- paste0(outcome_i, " ~ icu_admission + ", paste(covariates, collapse = " + "))
+    #     cat("\n---------------------\n")
+    #     cat("Cohort: ", deparse(substitute(cohort_data)), "\n")
+    #     cat(paste0("Running direct standardization model using equation:\n", model_equation, "\n\n"))
+    #     
+    #     for(i in seq_len(nrow(hosp_data))){
+    #       cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n"))
+    #       
+    #       if(hospital_data$imc_capable[i] == 1){
+    #         # Only select rows at the given hospital and in ICUs and IMCs
+    #         model_data <- cohort_data |> 
+    #           filter(first_hospital_id == hosp_data$first_hospital_id[i])|>
+    #           filter(tolower(triage_location) %in% c("icu", "stepdown")) |>
+    #           mutate(icu_admission = as.factor(ifelse(tolower(triage_location) == "icu", 1, 0)))
+    #         
+    #         # Run glm
+    #         unit_model <- glm(
+    #           model_equation,
+    #           data=model_data,
+    #           family=binomial
+    #         )
+    #         
+    #         model_output <- model_output |>
+    #           add_row(data.frame(
+    #             site=site,
+    #             hospital = hosp_data$first_hospital_id[i],
+    #             outcome=outcome_i,
+    #             term=names(unit_model$coeff),
+    #             estimate=unit_model$coeff,
+    #             std.error=summary(unit_model)$coefficients[,"Std. Error"],
+    #             p.value=summary(unit_model)$coefficients[,"Pr(>|z|)"],
+    #             n.obs=nobs(unit_model)
+    #           ))
+    #       }
+    #       else{
+    #         cat(paste0("      > Not IMC capable\n"))
+    #       }
+    #     }
+    #   }
+    #   
+    #   return(model_output)
+    # }
+    # 
+    # icu_imc_direct_stand_data <- icu_imc_direct_stand(final_cohort, hospital_data)
+    # 
+    # # Save outcomes
+    # write_csv(icu_imc_direct_stand_data, 
+    #           paste0(model_out_dir, site,"_imc_v_icu_direct_standardization.csv"))
+    
+  } # Direct standardization method (commented out for now)
+
 } # Compare outcomes between icu vs imc at imc-capable hospitals

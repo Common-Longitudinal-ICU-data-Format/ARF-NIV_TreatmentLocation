@@ -84,6 +84,7 @@ units <- c("icu", "ward", "stepdown")
                     "site",
                     "first_hospital_id", 
                     as.vector(outer(outcomes_binary, units, paste, sep=".")))
+    no_ward_cols <- gamma_cols[!grepl("ward", gamma_cols)]
     
     # Initialize the dataframe of gammas
     gamma_by_hosp = gamma_by_imc = 
@@ -92,6 +93,15 @@ units <- c("icu", "ward", "stepdown")
           c(list(character(), character(), character()),
             rep(list(numeric()), length(gamma_cols) - 3)),
           gamma_cols
+        )
+      )
+    
+    imc_vs_icu_gamma =
+      as.data.frame(
+        setNames(
+          c(list(character(), character(), character()),
+            rep(list(numeric()), length(no_ward_cols) - 3)),
+          no_ward_cols
         )
       )
     
@@ -114,6 +124,20 @@ units <- c("icu", "ward", "stepdown")
       gamma_by_imc <- gamma_by_imc |>
         add_row(read_in_gammas("gamma", "imc_cap", site)) |>
         add_row(read_in_gammas("gamma_error", "imc_cap", site))
+      
+      imc_vs_icu_gamma <- imc_vs_icu_gamma |>
+        add_row(read_csv(paste0(
+          project_location,
+          site, "_project_output/local_model_outputs/",
+          site,"_imc_vs_icu_gamma.csv"),
+          show_col_types =FALSE) |>
+            mutate(measure="gamma", site=site)) |>
+        add_row(read_csv(paste0(
+          project_location,
+          site, "_project_output/local_model_outputs/",
+          site,"_imc_vs_icu_gamma_error.csv"),
+          show_col_types =FALSE) |>
+            mutate(measure="gamma_error", site=site))
     }
     
   } # Load all gammas and their errors
@@ -121,7 +145,7 @@ units <- c("icu", "ward", "stepdown")
 } # Setup
 
 { # Run meta regressions (only for hospital-level)
-  run_rma <- function(gamma_list_all){
+  run_rma <- function(gamma_list_all, units, mod_vars = c("imc_capable", "academic_community")){
     gamma_BLUPs <- list()
     for(outcome_i in outcomes_binary){
       for(unit_i in units){
@@ -150,9 +174,8 @@ units <- c("icu", "ward", "stepdown")
         gamma_met_reg_new <- rma.uni(yi=gamma,
                                      vi=gamma_error^2,
                                      #mods = ~ academic_community,
-                                     mods = ~ imc_capable+academic_community,
+                                     mods = reformulate(mod_vars),
                                      data=matched_df)
-        
         
         gamma_BLUPs[[outcome_i]][[unit_i]] <- data.frame(
           first_hospital_id = unique(matched_df$first_hospital_id),
@@ -164,7 +187,9 @@ units <- c("icu", "ward", "stepdown")
     return(gamma_BLUPs)
   }
   
-  gamma_preds <- run_rma(gamma_by_hosp)
+  gamma_preds <- run_rma(gamma_by_hosp, units=units)
+  gamma_preds_imc_vs_icu <- run_rma(imc_vs_icu_gamma, units=c("icu", "stepdown"), 
+                                    mod_vars="academic_community")
   
   gamma_preds_df <- imap_dfr(gamma_preds, \(outcome_list, outcome_name) {
     imap_dfr(outcome_list, \(df, unit_name) {
@@ -176,7 +201,20 @@ units <- c("icu", "ward", "stepdown")
     })
   })
   
+  gamma_preds_imc_vs_icu_df <- imap_dfr(gamma_preds_imc_vs_icu, \(outcome_list, outcome_name) {
+    imap_dfr(outcome_list, \(df, unit_name) {
+      df %>%
+        mutate(
+          outcome = outcome_name,
+          unit = unit_name
+        )
+    })
+  })
+  
   write_csv(gamma_preds_df, 
             paste0(output_dir,"global_intercepts_by_hosp.csv"))
+  
+  write_csv(gamma_preds_imc_vs_icu_df, 
+            paste0(output_dir,"global_intercepts_imc_vs_icu.csv"))
   
 } # Run meta regressions (only for hospital-level)

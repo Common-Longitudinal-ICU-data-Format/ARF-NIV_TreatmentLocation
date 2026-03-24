@@ -15,8 +15,8 @@ units <- c("icu", "ward", "stepdown")
       "marginaleffects",
       "ordinal",
       "broom",
-      "logistf",
-      "ridge"
+      "logistf"#,
+      #"ridge"
     )
     
     install_if_missing <- function(package) {
@@ -31,6 +31,7 @@ units <- c("icu", "ward", "stepdown")
   } # Load needed packages
   
   { # Load config to specify local paths
+    cat("Load config to specify local paths\n")
     # Find project root
     project_root <- find_root(rprojroot::has_dir("config"))
     
@@ -52,6 +53,7 @@ units <- c("icu", "ward", "stepdown")
   } # Load config to specify local paths
   
   { # Create folders if needed
+    cat("Create folders if needed\n")
     # Check if the output directory exists; if not, create it
     if (!dir.exists(paste0(project_location, "/private_tables"))) {
       dir.create(paste0(project_location, "/private_tables"))
@@ -67,6 +69,7 @@ units <- c("icu", "ward", "stepdown")
   } # Create folders if needed
   
   { # Reading in and reformatting data
+    cat("Reading in and reformatting data\n")
     final_cohort <- read_csv(paste0(project_location, "/private_tables/one_encounter_per_pt_with_stratification.csv"), show_col_types=FALSE)
     reformat_cohort_cols <- function(df) {
       
@@ -181,6 +184,11 @@ units <- c("icu", "ward", "stepdown")
     meta_imc <- read_csv(paste0(project_location, 
                                  "/global_model_outputs/global_coeff_by_imc_capable.csv"),
                          show_col_types = FALSE)
+    
+    meta_imc_vs_icu <- read_csv(paste0(project_location, 
+                                       "/global_model_outputs/global_coeff_imc_icu_together.csv"),
+                                show_col_types = FALSE)
+      
     cov_names <- read_csv(paste0(project_location, 
                                 "/global_model_outputs/cov_names.csv"),
                          show_col_types = FALSE)|>pull(term)
@@ -222,6 +230,7 @@ units <- c("icu", "ward", "stepdown")
       )
   }
   
+  cat("Saving row-level covariate values\n")
   # Save row-level covariate values for next run privately (not to share with CLIF)
   write_csv(reshape_patient_covariate_cols(final_cohort),
             paste0(project_location, "/private_tables/model_data.csv"))
@@ -330,16 +339,22 @@ units <- c("icu", "ward", "stepdown")
       return(list(gamma=gamma_list_all, error=gamma_error_list_all))
     }
     
+    
+  cat("Generating gammas by hospital\n")
     # Run
     all_gammas_by_hospital <- calculate_gamma(final_cohort, 
                                               hospital_data, 
                                               meta_hosp, 
                                               "first_hospital_id")
+    
+    cat("Generating gammas by IMC capability\n")
     all_gammas_by_imc_cap <- calculate_gamma(final_cohort, 
                                               hospital_data, 
                                               meta_imc, 
                                               "imc_capable")
     
+    
+    cat("Saving gammas to file\n")
     # Save outcomes
     # Note: hospital order is defined by hospital_data
     write_csv(data.frame(all_gammas_by_hospital$gamma) |>
@@ -358,5 +373,121 @@ units <- c("icu", "ward", "stepdown")
     
   } # Generate hospital- or imccapable- level gammas
 
-} # Compare row-level data to summary coeff
+  { # Generate gammas for imc vs icu
+    
+    calculate_all_gammas_imc_v_icu <- function(cohort_data, hosp_data, meta_coeff){
+      
+      # Initialize gamma lists and errors
+      gamma_list_all <- list()
+      gamma_error_list_all <- list()
+      
+      # Select only relevant columns
+      model_data_all <- cohort_data |>
+        filter(triage_location %in% c("icu", "stepdown")) |>
+        select(c(triage_location, first_hospital_id, imc_capable, covariates, outcomes_binary))
+      
+      # Reformat data 
+      # E.g., rather than ph_factor as 0 1 2 etc, will have ph_factorNot Measured, ph_factor>7.35, ph_factor>7.30... as 0s and 1s
+      model_data_all <- reshape_patient_covariate_cols(model_data_all)
+      
+      for(outcome_i in outcomes_binary){
+        
+        for(unit_i in units){
+          # Select only the patients admitted to the desired unit at the specified hospital/imc capable
+          model_data_unit <- model_data_all |>
+            filter(triage_location == unit_i)
+          
+          # Initialize the gamma and gamma errors as empty
+          gamma_list = gamma_error_list = c()
+          
+          # Iterate over each hospital
+          for(i in c(1:nrow(hosp_data))){
+            
+            # Only do analysis if this hospital is IMC capable
+            if(hosp_data$imc_capable[i]== 1){
+              # Define the name of the df, therefore where indexed in the output list, 
+              # depending on if stratified by hospital
+              index_i <- hosp_data$first_hospital_id[i]
+              
+              # Select data from only this hospital
+              model_data <- model_data_unit |> 
+                filter(first_hospital_id == hosp_data$first_hospital_id[i]) |>
+                # Only want the covariate columns (converted to factored versions)
+                select(c(cov_names, outcome_i))
+              
+              if(nrow(model_data) > 0){
+                
+                # Global fixed effects generated for this outcome within a given unit
+                beta_meta_fix <- meta_coeff[[paste0(outcome_i, ".", unit_i)]]
+                
+                # Use beta as plug-in estimator and re-fit model
+                # each entry of os is the patient-specific linear predictor, 
+                # i.e. the log odds of the outcome for that patient
+                os = as.matrix(model_data |>
+                                 # Select only covairate cols
+                                 select(cov_names) |>
+                                 # Convert to character (must do before numeric)
+                                 mutate(across(everything(), as.character)) |>
+                                 # Convert to numeric
+                                 mutate(across(everything(), as.numeric))
+                ) %*% 
+                  as.matrix(beta_meta_fix)
+                
+                model_data <- transform(model_data,os=os)
+                
+                fit_sub = glm(model_data[[outcome_i]] ~ 1 + offset(os),
+                              data = model_data, family = "binomial")
+                
+                fit_summary = summary(fit_sub)
+                
+                # save the intercept
+                gamma_list[index_i] = fit_summary$coefficients[1]
+                gamma_error_list[index_i] = fit_summary$coefficients[2]
+              }
+              
+            }
+            else{
+              stop("IMC incapable hospital sent in accidentally")
+            }
+            
+          }
+          
+          gamma_list_all[[outcome_i]][[unit_i]] <- gamma_list
+          gamma_error_list_all[[outcome_i]][[unit_i]] <- gamma_error_list
+          
+        }
+      }
+      
+      return(list(gamma=gamma_list_all, error=gamma_error_list_all))
+    }
+    
+    imc_capable_hospital_data <- hospital_data|>filter(imc_capable==1)
+    
+    # Run
+    if(nrow(imc_capable_hospital_data) > 0){
 
+      cat("Repeating, but generating gammas for IMC vs ICU\n")
+
+      all_gammas_imc_v_icu <- calculate_all_gammas_imc_v_icu(final_cohort, 
+                                              imc_capable_hospital_data, 
+                                              meta_hosp)
+      
+      cat("Saving results\n")
+      # Note: hospital order is defined by hospital_data
+      write_csv(data.frame(all_gammas_imc_v_icu$gamma) |>
+                  rownames_to_column("first_hospital_id"),
+                paste0(model_out_dir, site, "_imc_vs_icu_gamma.csv"))
+      write_csv(data.frame(all_gammas_imc_v_icu$error) |>
+                  rownames_to_column("first_hospital_id"),
+                paste0(model_out_dir, site, "_imc_vs_icu_gamma_error.csv"))
+
+      cat("Run successful!\n")
+    }
+    else{
+      cat("No hospitals here are IMC capable, skipping secondary analysis\n")
+      cat("Run successful!\n")
+    }
+    
+  } # Generate gammas for imc vs icu
+  
+} # Compare row-level data to summary coeff
