@@ -29,7 +29,7 @@ To run this code, you must also be able to run R and Python and have clify insta
 
 ## Instructions
 
-**STAGE 1:**
+**Stage 1:**
 
 1. Rename `config/config_template.yaml` to `config/config.yaml` with site-specific details
 
@@ -58,7 +58,9 @@ To run this code, you must also be able to run R and Python and have clify insta
 
 4. Upload results, `[sitename]_project_output`, to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)
 
-5. Wait for Hopkins to pool the local coefficients to generate global coefficients
+5. NOTE: Do NOT share `private_tables`, as this includes patient row-level data; but please make sure to keep the `private_tables` folder in your secure location, as the row-level data will be used in later stages' analyses
+
+6. Wait for Hopkins to pool the local coefficients to generate global coefficients
 
 **Stage 2**
 
@@ -68,7 +70,9 @@ To run this code, you must also be able to run R and Python and have clify insta
 
 3. Upload results, `[sitename]_project_output`, to the shared box: [`https://app.box.com/folder/342878616000`](https://app.box.com/folder/342878616000)
 
-4. Wait for Hopkins to pool the local intercepts to generate global intercepts
+4. NOTE: Do NOT share `private_tables`, as this includes patient row-level data; but please make sure to keep the `private_tables` folder in your secure location, as the row-level data will be used in later stages' analyses
+
+5. Wait for Hopkins to pool the local intercepts to generate global intercepts
 
 **Stage 3**
 
