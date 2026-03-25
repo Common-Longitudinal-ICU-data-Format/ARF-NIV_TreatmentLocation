@@ -34,8 +34,10 @@ uv sync --project "${PROJECT_ROOT}" 2>&1 | tee -a "$LOG_FILE"
 log "${GREEN}Environment ready${RESET}"
 log ""
 
-# ── loading R module ─────────────────────────────────────────────────────────
-module load R
+# ── loading R module (HPC only) ──────────────────────────────────────────────
+if command -v module &>/dev/null; then
+  module load R
+fi
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
