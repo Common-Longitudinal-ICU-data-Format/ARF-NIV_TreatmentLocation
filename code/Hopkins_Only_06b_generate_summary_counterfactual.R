@@ -63,7 +63,9 @@ units <- c("icu", "ward", "stepdown")
       local_hospital=character(),
       n=integer(),
       clif_hospital=character(),
-      event_rate=numeric(),
+      sum_risks=numeric(),
+      sum_w=numeric(),
+      sum_xw=numeric(),
       stringsAsFactors = FALSE
     )
     

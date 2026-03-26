@@ -245,6 +245,7 @@ units <- c("icu", "ward", "stepdown")
       beta_error_list_all <- my_list$error
       
       summary_coeff_all <- list()
+      summary_coeff_var <- list()
       
       # Iterate over each outcome (deathhospice, etc) and unit (icu, stepdown, ward)
       for(outcome_i in outcomes_binary){
@@ -253,23 +254,27 @@ units <- c("icu", "ward", "stepdown")
           beta_error_list <- beta_error_list_all[[outcome_i]][[unit_i]]
           
           summary_coeff <- c()
+          summary_var_cov <- c()
           
           # Iterate over each column in the beta list
           # This corresponds to each covariate
           for(i in c(1:dim(beta_list)[2])){
             meta.fit = rma.uni(na.omit(beta_list[,i]), na.omit(beta_error_list[,i])^2)
             summary_coeff[i] <- meta.fit[["beta"]][,1]
+            summary_var_cov[i] <- meta.fit[["vb"]][,1]
           }
           ### Added names here
           names(summary_coeff)<- colnames(beta_list)
-          ###
+          names(summary_var_cov)<- colnames(beta_list)
+          
           summary_coeff_all[[outcome_i]][[unit_i]] <- summary_coeff
+          summary_coeff_var[[outcome_i]][[unit_i]] <- summary_var_cov
         }
       }
-      return(summary_coeff_all)
+      return(list(coeffs=summary_coeff_all, vars=summary_coeff_var))
     }
     
-    # Find way to order the outputted results so they are not just 21 numbers
+    
     meta_hosp <- run_meta_regression(lists_by_hosp, units=units)
     meta_imc <- run_meta_regression(lists_by_imc, units= units)
     
@@ -291,19 +296,23 @@ units <- c("icu", "ward", "stepdown")
           beta_error_list <- rbind(beta_error_list_all[[outcome_i]]$icu, beta_error_list_all[[outcome_i]]$stepdown)
           
           summary_coeff <- c()
+          summary_var_cov <- c()
           
           # Iterate over each column in the beta list
           # This corresponds to each covariate
           for(i in c(1:dim(beta_list)[2])){
             meta.fit = rma.uni(na.omit(beta_list[,i]), na.omit(beta_error_list[,i])^2)
             summary_coeff[i] <- meta.fit[["beta"]][,1]
+            summary_var_cov[i] <- meta.fit[["vb"]][,1]
           }
           ### Added names here
           names(summary_coeff)<- colnames(beta_list)
+          names(summary_var_cov)<- colnames(beta_list)
           ###
           summary_coeff_all[[outcome_i]] <- summary_coeff
+          summary_coeff_var[[outcome_i]] <- summary_var_cov
       }
-      return(summary_coeff_all)
+      return(list(coeffs=summary_coeff_all, vars=summary_coeff_var))
     }
     
     meta_imc_vs_icu <- run_meta_regression_imc_vs_icu(imc_icu_lists)
@@ -313,24 +322,28 @@ units <- c("icu", "ward", "stepdown")
   
   { # Save global coeffs
     
-    meta_hosp_df <- as.data.frame(meta_hosp)
-    meta_imc_df <- as.data.frame(meta_imc)
-    meta_imc_vs_icu_df <- as.data.frame(meta_imc_vs_icu)
-    # meta_imc_vs_icu_df <- as.data.frame(do.call(cbind, lapply(meta_imc_vs_icu, `[[`, 1)))
-    
     cov_names <- direct_standardization_by_hosp |> 
       filter(term!="(Intercept)") |> 
       select(term) |> 
       distinct()
     
-    write_csv(meta_hosp_df, 
-              paste0(output_dir,"global_coeff_by_hosp.csv"))
-    write_csv(meta_imc_df, 
-              paste0(output_dir,"global_coeff_by_imc_capable.csv"))
-    write_csv(meta_imc_vs_icu_df, 
-              paste0(output_dir,"global_coeff_imc_icu_together.csv"))
     write_csv(cov_names, 
               paste0(output_dir,"cov_names.csv"))
+    
+    write_csv(as.data.frame(meta_hosp[["coeffs"]]), 
+              paste0(output_dir,"global_coeff_by_hosp.csv"))
+    write_csv(as.data.frame(meta_imc[["coeffs"]]), 
+              paste0(output_dir,"global_coeff_by_imc_capable.csv"))
+    write_csv(as.data.frame(meta_imc_vs_icu[["coeffs"]]), 
+              paste0(output_dir,"global_coeff_imc_icu_together.csv"))
+    
+    
+    write_csv(as.data.frame(meta_hosp[["vars"]]), 
+              paste0(output_dir,"global_coeff_vars_by_hosp.csv"))
+    write_csv(as.data.frame(meta_imc[["vars"]]), 
+              paste0(output_dir,"global_coeff_vars_by_imc_capable.csv"))
+    write_csv(as.data.frame(meta_imc_vs_icu[["vars"]]), 
+              paste0(output_dir,"global_coeff_vars_imc_icu_together.csv"))
   } # Save global coeffs
   
 } # Set up and run meta regression

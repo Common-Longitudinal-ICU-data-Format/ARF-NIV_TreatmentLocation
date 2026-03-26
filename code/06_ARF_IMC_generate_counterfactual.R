@@ -107,14 +107,18 @@ units <- c("icu", "ward", "stepdown")
     local_hospital=character(),
     n=integer(),
     clif_hospital=character(),
-    event_rate=numeric(),
+    sum_risks=numeric(),
+    sum_w=numeric(),
+    sum_xw=numeric(),
     stringsAsFactors = FALSE
   )
   
   for(outcome_i in outcomes_binary){
     cat(paste0("> For outcome = ", outcome_i, "\n"))
     for(unit_i in units){
-        cat(paste0("     > In unit = ", unit_i, "\n"))
+      
+      cat(paste0("     > In unit = ", unit_i, "\n"))
+      
       counterfactual_data <- final_cohort |>
         filter(triage_location==unit_i) |>
         select(first_hospital_id,
@@ -132,10 +136,18 @@ units <- c("icu", "ward", "stepdown")
       hosp_ids_CLIF <- hospital_effect_df$first_hospital_id
       n_hosp_CLIF <- length(hosp_ids_CLIF)
       
-      event_rate <- matrix(data=NA, 
+      sum_risks <- matrix(data=NA, 
                            nrow=n_hosp_local, 
                            ncol=n_hosp_CLIF,
                            dimnames=list(hosp_ids_local, hosp_ids_CLIF))
+      sum_w <- matrix(data=NA, 
+                          nrow=n_hosp_local, 
+                          ncol=n_hosp_CLIF,
+                          dimnames=list(hosp_ids_local, hosp_ids_CLIF))
+      sum_xw <- matrix(data=NA, 
+                      nrow=n_hosp_local, 
+                      ncol=n_hosp_CLIF,
+                      dimnames=list(hosp_ids_local, hosp_ids_CLIF))
       
       bbar <- bbar_all[[paste0(outcome_i, ".", unit_i)]]
       
@@ -163,23 +175,32 @@ units <- c("icu", "ward", "stepdown")
           val <- gamma_i + as.matrix(counterfactual_data_hosp) %*% as.matrix(bbar)
           # Convert to risk for each patient
           risk_val <- exp(val)/(1+exp(val))
+          # Mathematical derivative of the risk
+          w <- risk_val * (1-risk_val)
           
           # Put into matrix, taking sum of risk across all patients
-          event_rate[ind,k]<-sum(risk_val)
+          sum_risks[ind,k]<-sum(risk_val)
+          sum_w[ind, k] <- sum(w)
+          sum_xw[ind, k] <- Reduce("+", 
+                                   colSums(as.vector(risk_val) * 
+                                             as.matrix(counterfactual_data_hosp)))
+          
         }
       }
       
-      # DOUBLE CHECK WITH JESSIE, since N is not constant
-      # nrow(counterfactual_data) is the number of patients used for the model
-      # at the entire site (all hospitals at a single site) for a given unit (e.g., icu)
-      # and for a given outcome (e.g., death_hospice)
-      # event_rate_final <- apply(event_rate,2,sum)/nrow(counterfactual_data)
+      sum_risks_long <- as.data.frame(as.table(sum_risks))
+      colnames(sum_risks_long) <- c("local_hospital", "clif_hospital", "sum_risks")
       
-      event_rate_long <- as.data.frame(as.table(event_rate))
-      colnames(event_rate_long) <- c("local_hospital", "clif_hospital", "event_rate")
+      sum_w_long <- as.data.frame(as.table(sum_w))
+      colnames(sum_w_long) <- c("local_hospital", "clif_hospital", "sum_w")
+      
+      sum_xw_long <- as.data.frame(as.table(sum_xw))
+      colnames(sum_xw_long) <- c("local_hospital", "clif_hospital", "sum_xw")
       
       all_event_rates <- all_event_rates |>
-        add_row(event_rate_long |>
+        add_row(sum_risks_long |>
+                  left_join(sum_w_long, by=c("local_hospital", "clif_hospital")) |>
+                  left_join(sum_xw_long, by=c("local_hospital", "clif_hospital")) |>
                   left_join(n_patients, by=c("local_hospital"="first_hospital_id")) |> 
                   mutate(outcome=outcome_i,
                          unit=unit_i))
