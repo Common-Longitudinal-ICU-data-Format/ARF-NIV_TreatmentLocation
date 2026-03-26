@@ -166,8 +166,12 @@ units_all <- c("icu", "ward", "stepdown")
           hosp_ids_local <- hosp_ids_local[hosp_ids_local %in% imc_capable_hospitals]
         }
         n_hosp_local <- length(hosp_ids_local)
-        
-        
+
+        if(n_hosp_local == 0){
+          cat("          > No local hospitals for this unit, skipping\n")
+          next
+        }
+
         hospital_effect_df <- my_hospital_effects |>
           filter(outcome==outcome_i, unit==unit_i)
         
