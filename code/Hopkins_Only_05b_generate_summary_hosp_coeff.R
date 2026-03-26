@@ -2,7 +2,7 @@
 # 03/09/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins")#, "UCMC")
+sites <- c("Hopkins", "UCMC")
 units <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -87,7 +87,7 @@ units <- c("icu", "ward", "stepdown")
     no_ward_cols <- gamma_cols[!grepl("ward", gamma_cols)]
     
     # Initialize the dataframe of gammas
-    gamma_by_hosp = gamma_by_imc = 
+    gamma_by_hosp = #gamma_by_imc = 
       as.data.frame(
         setNames(
           c(list(character(), character(), character()),
@@ -121,23 +121,31 @@ units <- c("icu", "ward", "stepdown")
         add_row(read_in_gammas("gamma", "hosp", site)) |>
         add_row(read_in_gammas("gamma_error", "hosp", site))
       
-      gamma_by_imc <- gamma_by_imc |>
-        add_row(read_in_gammas("gamma", "imc_cap", site)) |>
-        add_row(read_in_gammas("gamma_error", "imc_cap", site))
+      # gamma_by_imc <- gamma_by_imc |>
+      #   add_row(read_in_gammas("gamma", "imc_cap", site)) |>
+      #   add_row(read_in_gammas("gamma_error", "imc_cap", site))
       
-      imc_vs_icu_gamma <- imc_vs_icu_gamma |>
-        add_row(read_csv(paste0(
-          project_location,
-          site, "_project_output/local_model_outputs/",
-          site,"_imc_vs_icu_gamma.csv"),
-          show_col_types =FALSE) |>
-            mutate(measure="gamma", site=site)) |>
-        add_row(read_csv(paste0(
-          project_location,
-          site, "_project_output/local_model_outputs/",
-          site,"_imc_vs_icu_gamma_error.csv"),
-          show_col_types =FALSE) |>
-            mutate(measure="gamma_error", site=site))
+      hospital_data <- read_csv(paste0(
+        project_location,site, "_project_output/", site,"_hospital_data.csv"
+      ),
+                                show_col_types =FALSE)
+      
+      if(nrow(hospital_data|>filter(imc_capable==1))){
+        imc_vs_icu_gamma <- imc_vs_icu_gamma |>
+          add_row(read_csv(paste0(
+            project_location,
+            site, "_project_output/local_model_outputs/",
+            site,"_imc_vs_icu_gamma.csv"),
+            show_col_types =FALSE) |>
+              mutate(measure="gamma", site=site)) |>
+          add_row(read_csv(paste0(
+            project_location,
+            site, "_project_output/local_model_outputs/",
+            site,"_imc_vs_icu_gamma_error.csv"),
+            show_col_types =FALSE) |>
+              mutate(measure="gamma_error", site=site))
+      }
+
     }
     
   } # Load all gammas and their errors

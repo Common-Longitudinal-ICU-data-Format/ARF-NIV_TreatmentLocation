@@ -1,0 +1,17 @@
+first_hospital_id,gamma_blup,outcome,unit
+BMC,-1.9869197014791327,death_hospice,icu
+HCG,-1.6717474343274312,death_hospice,icu
+JHH,-1.9869197014791327,death_hospice,icu
+SUB,-1.6717474343274312,death_hospice,icu
+BMC,-2.1320354124494205,death_hospice,stepdown
+HCG,-1.9488033658658357,death_hospice,stepdown
+JHH,-2.1320333837419096,death_hospice,stepdown
+SUB,-1.948802560454564,death_hospice,stepdown
+BMC,-3.8403539077262714,organ_failure_yn,icu
+HCG,-3.684296660476445,organ_failure_yn,icu
+JHH,-3.681724381825588,organ_failure_yn,icu
+SUB,-3.775977025194499,organ_failure_yn,icu
+BMC,-4.014463428185268,organ_failure_yn,stepdown
+HCG,-3.981089273348106,organ_failure_yn,stepdown
+JHH,-3.635372046216573,organ_failure_yn,stepdown
+SUB,-4.039586616566801,organ_failure_yn,stepdown
