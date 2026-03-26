@@ -166,8 +166,12 @@ units_all <- c("icu", "ward", "stepdown")
           hosp_ids_local <- hosp_ids_local[hosp_ids_local %in% imc_capable_hospitals]
         }
         n_hosp_local <- length(hosp_ids_local)
-        
-        
+
+        if(n_hosp_local == 0){
+          cat("          > No local hospitals for this unit, skipping\n")
+          next
+        }
+
         hospital_effect_df <- my_hospital_effects |>
           filter(outcome==outcome_i, unit==unit_i)
         
@@ -273,9 +277,9 @@ units_all <- c("icu", "ward", "stepdown")
   
   
   cat("Event rates saved... saving output...\n")
-  write_csv(primary_outcomes[["all_event_rates"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+  write_csv(primary_outcomes[["all_event_rates"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                     site, "_all_event_rates.csv"))
-  write_csv(primary_outcomes[["all_xw"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+  write_csv(primary_outcomes[["all_xw"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                     site, "_all_xw.csv"))
   
   if(length(imc_capable_hospitals > 0)){
@@ -286,9 +290,9 @@ units_all <- c("icu", "ward", "stepdown")
                                           imc_cap_only=T)
     
     cat("Event rates saved... saving output...\n")
-    write_csv(secondary_outcomes[["all_event_rates"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+    write_csv(secondary_outcomes[["all_event_rates"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                                               site, "_secondary_event_rates.csv"))
-    write_csv(secondary_outcomes[["all_xw"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+    write_csv(secondary_outcomes[["all_xw"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                                      site, "_secondary_xw.csv"))
   }
   else{
