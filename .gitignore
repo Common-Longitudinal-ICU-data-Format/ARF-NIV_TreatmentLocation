@@ -33,7 +33,6 @@ initialize_renv.R
 private_tables/
 *_project_output/
 final_federated_outputs/
-#global_model_outputs/
 output/
 config/config.yaml
 .venv
