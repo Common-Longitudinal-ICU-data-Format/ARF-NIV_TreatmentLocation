@@ -277,9 +277,9 @@ units_all <- c("icu", "ward", "stepdown")
   
   
   cat("Event rates saved... saving output...\n")
-  write_csv(primary_outcomes[["all_event_rates"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+  write_csv(primary_outcomes[["all_event_rates"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                     site, "_all_event_rates.csv"))
-  write_csv(primary_outcomes[["all_xw"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+  write_csv(primary_outcomes[["all_xw"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                     site, "_all_xw.csv"))
   
   if(length(imc_capable_hospitals > 0)){
@@ -290,9 +290,9 @@ units_all <- c("icu", "ward", "stepdown")
                                           imc_cap_only=T)
     
     cat("Event rates saved... saving output...\n")
-    write_csv(secondary_outcomes[["all_event_rates"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+    write_csv(secondary_outcomes[["all_event_rates"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                                               site, "_secondary_event_rates.csv"))
-    write_csv(secondary_outcomes[["all_xw"]], paste0(project_location, site,"_project_output/local_model_outputs/",
+    write_csv(secondary_outcomes[["all_xw"]], paste0(project_location, "/", site,"_project_output/local_model_outputs/",
                                                      site, "_secondary_xw.csv"))
   }
   else{
