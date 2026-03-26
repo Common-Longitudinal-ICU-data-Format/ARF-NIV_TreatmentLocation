@@ -2,7 +2,7 @@
 # 03/04/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins")
+sites <- c("Hopkins", "UCMC")
 units <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -289,6 +289,7 @@ units <- c("icu", "ward", "stepdown")
       beta_error_list_all <- my_list$error
       
       summary_coeff_all <- list()
+      summary_coeff_var <- list()
       
       # Iterate over each outcome (deathhospice, etc)
       for(outcome_i in outcomes_binary){

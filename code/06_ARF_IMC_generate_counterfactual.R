@@ -109,8 +109,19 @@ units <- c("icu", "ward", "stepdown")
     clif_hospital=character(),
     sum_risks=numeric(),
     sum_w=numeric(),
-    sum_xw=numeric(),
     stringsAsFactors = FALSE
+  )
+  
+  all_xw <- data.frame(
+    outcome = character(),
+    unit = character(),
+    local_hospital = character(),
+    clif_hospital = character(),
+    setNames(
+      replicate(length(cov_names), numeric(0), simplify = FALSE),
+      cov_names
+    ),
+    check.names=FALSE
   )
   
   for(outcome_i in outcomes_binary){
@@ -144,10 +155,8 @@ units <- c("icu", "ward", "stepdown")
                           nrow=n_hosp_local, 
                           ncol=n_hosp_CLIF,
                           dimnames=list(hosp_ids_local, hosp_ids_CLIF))
-      sum_xw <- matrix(data=NA, 
-                      nrow=n_hosp_local, 
-                      ncol=n_hosp_CLIF,
-                      dimnames=list(hosp_ids_local, hosp_ids_CLIF))
+      
+      sum_xw <- list()
       
       bbar <- bbar_all[[paste0(outcome_i, ".", unit_i)]]
       
@@ -156,6 +165,9 @@ units <- c("icu", "ward", "stepdown")
       # Iterate over each local hospital
       for(ind in c(1:n_hosp_local)){
         cat(paste0("          > At local hospital = ", hosp_ids_local[ind], "\n"))
+        
+        sum_xw[[hosp_ids_local[ind]]] <- list()
+        
         # Subset to only data at this hospital
         counterfactual_data_hosp <- counterfactual_data |>
           filter(first_hospital_id == hosp_ids_local[ind]) |>
@@ -181,9 +193,8 @@ units <- c("icu", "ward", "stepdown")
           # Put into matrix, taking sum of risk across all patients
           sum_risks[ind,k]<-sum(risk_val)
           sum_w[ind, k] <- sum(w)
-          sum_xw[ind, k] <- Reduce("+", 
-                                   colSums(as.vector(risk_val) * 
-                                             as.matrix(counterfactual_data_hosp)))
+          sum_xw[[hosp_ids_local[ind]]][[hosp_ids_CLIF[k]]] <- colSums(as.vector(risk_val) *
+                                          as.matrix(counterfactual_data_hosp))
           
         }
       }
@@ -194,16 +205,28 @@ units <- c("icu", "ward", "stepdown")
       sum_w_long <- as.data.frame(as.table(sum_w))
       colnames(sum_w_long) <- c("local_hospital", "clif_hospital", "sum_w")
       
-      sum_xw_long <- as.data.frame(as.table(sum_xw))
-      colnames(sum_xw_long) <- c("local_hospital", "clif_hospital", "sum_xw")
+      # Reshape this to a readable df
+      sum_xw <- imap_dfr(sum_xw, function(inner_list, local_name) {
+        imap_dfr(inner_list, function(vec, clif_name) {
+          as_tibble_row(vec) %>%
+            mutate(
+              local_hospital = local_name,
+              clif_hospital = clif_name,
+              .before = 1
+            )
+        })
+      })
       
       all_event_rates <- all_event_rates |>
         add_row(sum_risks_long |>
                   left_join(sum_w_long, by=c("local_hospital", "clif_hospital")) |>
-                  left_join(sum_xw_long, by=c("local_hospital", "clif_hospital")) |>
                   left_join(n_patients, by=c("local_hospital"="first_hospital_id")) |> 
                   mutate(outcome=outcome_i,
                          unit=unit_i))
+      
+      all_xw <- all_xw |>
+        add_row(sum_xw |>
+                  mutate(outcome=outcome_i, unit=unit_i))
       
     }
   }
@@ -211,6 +234,8 @@ units <- c("icu", "ward", "stepdown")
   cat("Event rates saved... saving output...\n")
   write_csv(all_event_rates, paste0(project_location, site,"_project_output/local_model_outputs/",
                                     site, "_all_event_rates.csv"))
+  write_csv(all_xw, paste0(project_location, site,"_project_output/local_model_outputs/",
+                                    site, "_all_xw.csv"))
 
   cat("Run successfully!\n")
   
