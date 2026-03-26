@@ -91,7 +91,7 @@ units <- c("icu", "ward", "stepdown")
       }
       
       direct_standardization_by_hosp <- load_direct_standardization("hosp")
-      direct_standardization_by_imc_cap <- load_direct_standardization("imc_cap")
+      # direct_standardization_by_imc_cap <- load_direct_standardization("imc_cap")
     } # Direct standardization results
 
     { # Hospital data
@@ -226,7 +226,7 @@ units <- c("icu", "ward", "stepdown")
     }
     
     lists_by_hosp <- create_beta_list(direct_standardization_by_hosp, "hosp", units=units)
-    lists_by_imc <- create_beta_list(direct_standardization_by_imc_cap, "imc_cap", units=units)
+    #lists_by_imc <- create_beta_list(direct_standardization_by_imc_cap, "imc_cap", units=units)
     
     imc_icu_lists <- create_beta_list(direct_standardization_by_hosp |>
                                         filter(hospital %in% hospials_with_imc,
@@ -276,7 +276,7 @@ units <- c("icu", "ward", "stepdown")
     
     
     meta_hosp <- run_meta_regression(lists_by_hosp, units=units)
-    meta_imc <- run_meta_regression(lists_by_imc, units= units)
+    #meta_imc <- run_meta_regression(lists_by_imc, units= units)
     
     
   } # Run meta regression
@@ -333,16 +333,16 @@ units <- c("icu", "ward", "stepdown")
     
     write_csv(as.data.frame(meta_hosp[["coeffs"]]), 
               paste0(output_dir,"global_coeff_by_hosp.csv"))
-    write_csv(as.data.frame(meta_imc[["coeffs"]]), 
-              paste0(output_dir,"global_coeff_by_imc_capable.csv"))
+    # write_csv(as.data.frame(meta_imc[["coeffs"]]), 
+    #           paste0(output_dir,"global_coeff_by_imc_capable.csv"))
     write_csv(as.data.frame(meta_imc_vs_icu[["coeffs"]]), 
               paste0(output_dir,"global_coeff_imc_icu_together.csv"))
     
     
     write_csv(as.data.frame(meta_hosp[["vars"]]), 
               paste0(output_dir,"global_coeff_vars_by_hosp.csv"))
-    write_csv(as.data.frame(meta_imc[["vars"]]), 
-              paste0(output_dir,"global_coeff_vars_by_imc_capable.csv"))
+    # write_csv(as.data.frame(meta_imc[["vars"]]), 
+    #           paste0(output_dir,"global_coeff_vars_by_imc_capable.csv"))
     write_csv(as.data.frame(meta_imc_vs_icu[["vars"]]), 
               paste0(output_dir,"global_coeff_vars_imc_icu_together.csv"))
   } # Save global coeffs

@@ -181,9 +181,9 @@ units <- c("icu", "ward", "stepdown")
     meta_hosp <- read_csv(paste0(project_location, 
                                  "/global_model_outputs/global_coeff_by_hosp.csv"),
                           show_col_types = FALSE)
-    meta_imc <- read_csv(paste0(project_location, 
-                                 "/global_model_outputs/global_coeff_by_imc_capable.csv"),
-                         show_col_types = FALSE)
+    # meta_imc <- read_csv(paste0(project_location, 
+    #                              "/global_model_outputs/global_coeff_by_imc_capable.csv"),
+    #                      show_col_types = FALSE)
     
     meta_imc_vs_icu <- read_csv(paste0(project_location, 
                                        "/global_model_outputs/global_coeff_imc_icu_together.csv"),
@@ -347,11 +347,11 @@ units <- c("icu", "ward", "stepdown")
                                               meta_hosp, 
                                               "first_hospital_id")
     
-    cat("Generating gammas by IMC capability\n")
-    all_gammas_by_imc_cap <- calculate_gamma(final_cohort, 
-                                              hospital_data, 
-                                              meta_imc, 
-                                              "imc_capable")
+    # cat("Generating gammas by IMC capability\n")
+    # all_gammas_by_imc_cap <- calculate_gamma(final_cohort, 
+    #                                           hospital_data, 
+    #                                           meta_imc, 
+    #                                           "imc_capable")
     
     
     cat("Saving gammas to file\n")
@@ -364,12 +364,12 @@ units <- c("icu", "ward", "stepdown")
                 rownames_to_column("first_hospital_id"),
               paste0(model_out_dir, site, "_gamma_error_by_hosp.csv"))
     
-    write_csv(data.frame(all_gammas_by_imc_cap$gamma) |>
-                rownames_to_column("first_hospital_id"),
-              paste0(model_out_dir, site, "_gamma_by_imc_cap.csv"))
-    write_csv(data.frame(all_gammas_by_imc_cap$error) |>
-                rownames_to_column("first_hospital_id"),
-              paste0(model_out_dir, site, "_gamma_error_by_imc_cap.csv"))
+    # write_csv(data.frame(all_gammas_by_imc_cap$gamma) |>
+    #             rownames_to_column("first_hospital_id"),
+    #           paste0(model_out_dir, site, "_gamma_by_imc_cap.csv"))
+    # write_csv(data.frame(all_gammas_by_imc_cap$error) |>
+    #             rownames_to_column("first_hospital_id"),
+    #           paste0(model_out_dir, site, "_gamma_error_by_imc_cap.csv"))
     
   } # Generate hospital- or imccapable- level gammas
 
