@@ -3,6 +3,9 @@
 
 { # Setup
   { # Load needed packages
+    if (is.null(getOption("repos")) || getOption("repos")["CRAN"] == "@CRAN@") {                                                                                                                                                                                                                                                                                       
+       options(repos = c(CRAN = "https://cloud.r-project.org"))                                                                                                                                                                                                                                                                                                         
+}  
   packages <- c(
     "tidyverse",
     "yaml",
