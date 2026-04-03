@@ -13,8 +13,8 @@
     "marginaleffects",
     "ordinal",
     "broom",
-    "logistf"#,
-    #"ridge"
+    "logistf",
+    "remotes"
   )
   
   install_if_missing <- function(package) {
