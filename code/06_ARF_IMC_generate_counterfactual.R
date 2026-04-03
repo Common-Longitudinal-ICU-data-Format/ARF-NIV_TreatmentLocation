@@ -9,14 +9,7 @@ units_all <- c("icu", "ward", "stepdown")
       "tidyverse",
       "yaml",
       "rprojroot",
-      "stringr",
-      "lmtest",
-      "sandwich",
-      "marginaleffects",
-      "ordinal",
-      "broom",
-      "logistf"#,
-      #"ridge"
+      "stringr"
     )
     
     install_if_missing <- function(package) {

@@ -26,6 +26,11 @@
   
   sapply(packages, install_if_missing)
   rm(packages, install_if_missing)
+  
+  if(packageVersion("marginaleffects")>"0.24.0"){
+    remotes::install_version("marginaleffects", version="0.25.1")
+  }
+  
   } # Load needed packages
   
   { # Load config to specify local paths

@@ -2,7 +2,7 @@
 # 03/09/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins")#, "UCMC")
+sites <- c("Hopkins", "UCMC")
 units_all <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -114,18 +114,26 @@ units_all <- c("icu", "ward", "stepdown")
                                 "_all_xw.csv"),
                          show_col_types = FALSE))
       
+      hospital_data <- read_csv(paste0(
+        project_location,site, "_project_output/", site,"_hospital_data.csv"
+      ),
+      show_col_types =FALSE)
       
-      secondary_event_rates <- secondary_event_rates |>
-        add_row(read_csv(paste0(project_location, site,
-                                "_project_output/local_model_outputs/", site,
-                                "_secondary_event_rates.csv"),
-                         show_col_types = FALSE))
+      # Only read in from hospitals that are imc capable
+      if(nrow(hospital_data|>filter(imc_capable==1))){
       
-      secondary_xw <- secondary_xw |>
-        add_row(read_csv(paste0(project_location, site,
-                                "_project_output/local_model_outputs/", site,
-                                "_secondary_xw.csv"),
-                         show_col_types = FALSE))
+        secondary_event_rates <- secondary_event_rates |>
+          add_row(read_csv(paste0(project_location, site,
+                                  "_project_output/local_model_outputs/", site,
+                                  "_secondary_event_rates.csv"),
+                           show_col_types = FALSE))
+        
+        secondary_xw <- secondary_xw |>
+          add_row(read_csv(paste0(project_location, site,
+                                  "_project_output/local_model_outputs/", site,
+                                  "_secondary_xw.csv"),
+                           show_col_types = FALSE))
+      }
       
     }
     
@@ -159,11 +167,30 @@ rser_ci_from_site_summaries <- function(
   var_rser <- as.numeric(g_gamma^2 * var_gamma + t(g_beta) %*% var_beta %*% g_beta)
   se_rser <- sqrt(var_rser)
   
-  data.frame(p_hat = p_hat,
+  expit <- function(x){
+    1/(1+exp(-x))
+  }
+  
+  # Logit scale CI
+  logit_hat <- log(p_hat/(1-p_hat))
+  se_logit <- se_rser / (p_hat * (1-p_hat))
+  lower <- expit(logit_hat - z * se_logit)
+  upper <- expit(logit_hat + z * se_logit)
+  
+  outcome_df <- data.frame(p_hat = p_hat,
              var   = var_rser,
              se    = se_rser,
-             lower = p_hat - z * se_rser,
-             upper = p_hat + z * se_rser)
+             lower_prob = p_hat - z * se_rser,
+             upper_prob = p_hat + z * se_rser,
+             lower_log = lower,
+             upper_log = upper)
+  
+  outcome_df <- outcome_df|> mutate(
+    width_prob = upper_prob-lower_prob,
+    width_log = upper_log-lower_log
+  )
+  
+  return(outcome_df)
 }
 
 { # Calculate final event rate for each hospital at each level of care for each outcome
@@ -184,6 +211,17 @@ rser_ci_from_site_summaries <- function(
       stringsAsFactors = FALSE
     )
     
+    # rser_ci_results <- data.frame(
+    #   outcome=character(),
+    #   unit=character(),
+    #   clif_hospital = character(),
+    #   p_hat = numeric(),
+    #   var = numeric(),
+    #   se = numeric(),
+    #   lower = numeric(),
+    #   upper=numeric(),
+    #   stringsAsFactors = FALSE
+    # )   
     rser_ci_results <- data.frame(
       outcome=character(),
       unit=character(),
@@ -191,8 +229,12 @@ rser_ci_from_site_summaries <- function(
       p_hat = numeric(),
       var = numeric(),
       se = numeric(),
-      lower = numeric(),
-      upper=numeric(),
+      lower_prob = numeric(),
+      upper_prob=numeric(),
+      lower_log = numeric(),
+      upper_log=numeric(),
+      width_prob = numeric(),
+      width_log=numeric(),
       stringsAsFactors = FALSE
     )
     

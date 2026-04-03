@@ -187,7 +187,8 @@ units <- c("icu", "ward", "stepdown")
         
         gamma_BLUPs[[outcome_i]][[unit_i]] <- data.frame(
           first_hospital_id = unique(matched_df$first_hospital_id),
-          gamma_blup = blup(gamma_met_reg_new)$pred)
+          gamma_blup = blup(gamma_met_reg_new)$pred,
+          gamma_blup_se = blup(gamma_met_reg_new)$se)
         
       }
     }
