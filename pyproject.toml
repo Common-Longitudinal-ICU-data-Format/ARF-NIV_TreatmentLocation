@@ -33,7 +33,7 @@ name = "arf-niv-treatment-location"
 version = "0.1.0"
 description = "Analysis of ARF-NIV treatment locations and patient outcomes"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.14"
 
 dependencies = [
     "pandas==2.3.2", 
