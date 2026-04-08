@@ -359,10 +359,10 @@
       
       # Iterate over each hospital at this local site
       for(i in seq_len(nrow(hosp_data))){
-        cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n   "))
+        cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n"))
         
         if(setequal(locations_incl,c("icu", "stepdown")) & hosp_data$imc_capable[i]==0){
-          cat(paste0(" This hospital is not IMC capable, skipped!\n"))
+          cat(paste0("     This hospital is not IMC capable, skipped!\n"))
           next
         }
         
@@ -370,12 +370,26 @@
         model_data <- all_model_data |>
           filter(first_hospital_id == hosp_data$first_hospital_id[i])
         
-        # Run logistic regression
-        model_1 <- glm(
-          model_equation,
-          data=model_data,
-          family=binomial
-        )
+        # Check if there are actual levels for era in this hospital
+        # If only one era, run without era
+        if("era" %in% covariates & length(unique(model_data$era)) <= 1){
+          cat(paste0("     This hospital has only one era, removing era from analysis\n"))
+          model_equation_no_era <- paste0(outcome, " ~ icu_admission + ", paste(covariates[covariates != "era"], collapse = " + "))
+          
+          model_1 <- glm(
+            model_equation_no_era,
+            data=model_data,
+            family=binomial
+          )
+        }
+        # If more than one era, run with era
+        else{
+          model_1 <- glm(
+            model_equation,
+            data=model_data,
+            family=binomial
+          )
+        }
         
         # Marginal effects
         marginal_effects_slopes <- avg_slopes(
@@ -424,7 +438,7 @@
             prediction_non_icu_p=(marginal_effects_preds |> filter(icu_admission==0))$p.value,
           )
         
-        cat(paste0(" Complete!\n"))
+        cat(paste0("     Complete!\n"))
       }
     }
     
@@ -486,7 +500,7 @@
     )
     
     # Run logistic regressions
-    run_regression_per_unit <- function(model_data_unit, unit, i){
+    run_regression_per_unit <- function(model_data_unit, unit, i, model_equation_i){
       
       # Subset to only cases within relevant unit (icu, stepdown, ward)
       model_data_unit <- model_data_unit |>
@@ -502,7 +516,7 @@
       tryCatch({
         cat("            > Attempting GLM... ")
         unit_model <- glm(
-          model_equation,
+          model_equation_i,
           data=model_data_unit,
           family=binomial
         )
@@ -520,7 +534,7 @@
         tryCatch({
           cat("            > Attempting logistf... ")
           unit_model <- logistf(
-            model_equation,
+            model_equation_i,
             data=model_data_unit,
             family=binomial,
             control = logistf.control(
@@ -536,23 +550,6 @@
           message(paste0("              ",w$message))
         })
       }
-      
-      # # 3) If failed, attempt ridge regression
-      # if(is.na(used_model)){
-      #   tryCatch({
-      #       cat("            > Attempting ridge... ")
-      #     unit_model <- logisticRidge(
-      #       model_equation,
-      #       data = model_data_unit,
-      #       na.action=na.omit)
-      #       used_model <- "ridge"
-      #       cat("ridge successful!\n")
-      #     },
-      #     warning=function(w){
-      #       cat("ridge failed!\n")
-      #       message(paste0("              ",w$message))
-      #     })
-      # }
       
       # If all failed, return warning
       if(is.na(used_model)){
@@ -654,13 +651,23 @@
           model_data <- cohort_data |> 
             filter(first_hospital_id == hosp_data$first_hospital_id[i])
           
+          # If only one era, run without era
+          if("era" %in% covariates & length(unique(model_data$era)) <= 1){
+            cat("     This hospital has only one era, removing era from analysis\n")
+            model_equation_i <-  paste0(outcome, " ~ ", paste(covariates[covariates != "era"], collapse = " + "))
+          }
+          # If more than one era, run with era
+          else{
+            model_equation_i <- model_equation
+          }
+          
           model_output <- model_output |>
-            add_row(run_regression_per_unit(model_data, "icu", i))|>
-            add_row(run_regression_per_unit(model_data, "ward", i))
+            add_row(run_regression_per_unit(model_data, "icu", i, model_equation_i))|>
+            add_row(run_regression_per_unit(model_data, "ward", i, model_equation_i))
           
           if(hospital_data$imc_capable[i] == 1){
             model_output <- model_output |>
-              add_row(run_regression_per_unit(model_data, "stepdown", i))
+              add_row(run_regression_per_unit(model_data, "stepdown", i, model_equation_i))
           }
           else{
             cat(paste0("      > Not IMC capable\n"))
@@ -675,13 +682,23 @@
           model_data <- cohort_data |> 
             filter(imc_capable == i)
           
+          # If only one era, run without era
+          if("era" %in% covariates & length(unique(model_data$era)) <= 1){
+            cat("     This stratum has only one era, removing era from analysis\n")
+            model_equation_i <-  paste0(outcome, " ~ ", paste(covariates[covariates != "era"], collapse = " + "))
+          }
+          # If more than one era, run with era
+          else{
+            model_equation_i <- model_equation
+          }
+          
           model_output <- model_output |>
-            add_row(run_regression_per_unit(model_data, "icu", i))|>
-            add_row(run_regression_per_unit(model_data, "ward", i))
+            add_row(run_regression_per_unit(model_data, "icu", i, model_equation_i))|>
+            add_row(run_regression_per_unit(model_data, "ward", i, model_equation_i))
           
           if(i == 1){
             model_output <- model_output |>
-              add_row(run_regression_per_unit(model_data, "stepdown", i))
+              add_row(run_regression_per_unit(model_data, "stepdown", i, model_equation_i))
           }
         }
       }
@@ -758,15 +775,23 @@
     
     # Iterate over each hospital at this local site
     for(i in seq_len(nrow(hosp_data))){
-      cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n   "))
+      cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n"))
       
       # Only select rows at the given hospital
       model_data <- all_model_data |>
         filter(first_hospital_id == hosp_data$first_hospital_id[i])
       
+      if("era" %in% covariates & length(unique(model_data$era)) <= 1){
+        cat("     This hospital has only one era, removing era from analysis\n")
+        model_equation_i <- paste0("icu_admission ~ ", paste(covariates[covariates != "era"], collapse = " + "))
+      }
+      else{
+        model_equation_i <- model_equation
+      }
+      
       # Run logistic regression
       model_1 <- glm(
-        model_equation,
+        model_equation_i,
         data=model_data,
         family=binomial
       )
@@ -800,7 +825,7 @@
           n_obs=nobs(model_1)
         )
       
-      cat(paste0(" Complete!\n"))
+      cat(paste0("     Complete!\n"))
     }
     return(list(model_coeff=model_output, model_predictions=model_predictions))
   }
@@ -829,73 +854,5 @@
     write_csv(model_coefficients_imc_icu, paste0(model_out_dir, site,
                                                  "_imc_v_icu_logit_model_coefficients.csv"))
   } # Logit method
-  
-  { # Direct standardization method
-    # icu_imc_direct_stand <- function(cohort_data, hosp_data){
-    #   
-    #   # Initialize the model output dataframe
-    #   model_output <- data.frame(
-    #     site = character(),
-    #     hospital = character(),
-    #     outcome=character(),
-    #     term=character(),
-    #     estimate=numeric(),
-    #     std.error=numeric(),
-    #     p.value=numeric(),
-    #     n.obs=integer(),
-    #     stringsAsFactors = FALSE
-    #   )
-    #   
-    #   for(outcome_i in outcomes_binary){
-    #     model_equation <- paste0(outcome_i, " ~ icu_admission + ", paste(covariates, collapse = " + "))
-    #     cat("\n---------------------\n")
-    #     cat("Cohort: ", deparse(substitute(cohort_data)), "\n")
-    #     cat(paste0("Running direct standardization model using equation:\n", model_equation, "\n\n"))
-    #     
-    #     for(i in seq_len(nrow(hosp_data))){
-    #       cat(paste0("   > Running for: ",hosp_data$first_hospital_id[i], "...\n"))
-    #       
-    #       if(hospital_data$imc_capable[i] == 1){
-    #         # Only select rows at the given hospital and in ICUs and IMCs
-    #         model_data <- cohort_data |> 
-    #           filter(first_hospital_id == hosp_data$first_hospital_id[i])|>
-    #           filter(tolower(triage_location) %in% c("icu", "stepdown")) |>
-    #           mutate(icu_admission = as.factor(ifelse(tolower(triage_location) == "icu", 1, 0)))
-    #         
-    #         # Run glm
-    #         unit_model <- glm(
-    #           model_equation,
-    #           data=model_data,
-    #           family=binomial
-    #         )
-    #         
-    #         model_output <- model_output |>
-    #           add_row(data.frame(
-    #             site=site,
-    #             hospital = hosp_data$first_hospital_id[i],
-    #             outcome=outcome_i,
-    #             term=names(unit_model$coeff),
-    #             estimate=unit_model$coeff,
-    #             std.error=summary(unit_model)$coefficients[,"Std. Error"],
-    #             p.value=summary(unit_model)$coefficients[,"Pr(>|z|)"],
-    #             n.obs=nobs(unit_model)
-    #           ))
-    #       }
-    #       else{
-    #         cat(paste0("      > Not IMC capable\n"))
-    #       }
-    #     }
-    #   }
-    #   
-    #   return(model_output)
-    # }
-    # 
-    # icu_imc_direct_stand_data <- icu_imc_direct_stand(final_cohort, hospital_data)
-    # 
-    # # Save outcomes
-    # write_csv(icu_imc_direct_stand_data, 
-    #           paste0(model_out_dir, site,"_imc_v_icu_direct_standardization.csv"))
-    
-  } # Direct standardization method (commented out for now)
 
 } # Compare outcomes between icu vs imc at imc-capable hospitals
