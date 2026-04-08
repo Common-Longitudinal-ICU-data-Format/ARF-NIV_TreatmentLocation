@@ -465,14 +465,17 @@
           select(hospital_block_id, recorded_dttm, device_category),
         by = "hospital_block_id"
       ) |>
-      # Select only respiratory support events that are NIV and within a given ED encounter
+      # Select only respiratory support events that are NIV
+      filter(tolower(device_category) %in% NIV_NAMES) |>
+      # Must collect before filtering based on time
+      # Some CLIF sites need this collect because time stamps are not consistent
+      collect() |>
+      # Select only events that are within time range
       filter(
-        tolower(device_category) %in% NIV_NAMES,
         recorded_dttm >= start_ed,
         recorded_dttm <= stop_ed
       ) |>
       distinct() |>
-      collect() |>
       group_by(hospital_block_id) |>
       # Select only the first NIV within the ED
       slice_min(recorded_dttm, with_ties = FALSE) |>
