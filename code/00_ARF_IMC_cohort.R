@@ -194,6 +194,40 @@
 
 { # Create hospital blocks and merge
   
+  { # Ensure all time data structure are the same between tables
+    cat("Ensure all time data structure are the same between tables\n")
+    
+    cat("     > clif_hospitalization...\n")
+    clif_hospitalization <- clif_hospitalization |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_adt...\n")
+    clif_adt <- clif_adt |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_respiratory_support...\n")
+    clif_respiratory_support <- clif_respiratory_support |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_medication_admin_continuous...\n")
+    clif_medication_admin_continuous <- clif_medication_admin_continuous |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_crrt_therapy...\n")
+    clif_crrt_therapy <- clif_crrt_therapy |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_code_status...\n")
+    clif_code_status <- clif_code_status |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+  } # Ensure all time data structure are the same between tables
+  
   { # Create hospital blocks
     
     cat("Creating hospital blocks\n")
@@ -467,14 +501,14 @@
       ) |>
       # Select only respiratory support events that are NIV
       filter(tolower(device_category) %in% NIV_NAMES) |>
-      # Must collect before filtering based on time
-      # Some CLIF sites need this collect because time stamps are not consistent
-      collect() |>
       # Select only events that are within time range
       filter(
         recorded_dttm >= start_ed,
         recorded_dttm <= stop_ed
       ) |>
+      # Must collect before filtering based on time
+      # Some CLIF sites need this collect because time stamps are not consistent
+      collect() |>
       distinct() |>
       group_by(hospital_block_id) |>
       # Select only the first NIV within the ED
@@ -506,13 +540,13 @@
           select(hospital_block_id, recorded_dttm, device_category),
         by = "hospital_block_id"
       ) |>
-      # Collecting before filter because it errors the other way around
-      collect() |>
       # Select only respiratory support events that are NIV and within a given ED encounter
       filter(
         recorded_dttm >= niv_start,
         recorded_dttm <= stability_window_end
       ) |>
+      # Collecting before filter because it errors the other way around
+      collect() |>
       # Group by individual hospitalization block
       group_by(hospital_block_id) |>
       # Organize chronologically

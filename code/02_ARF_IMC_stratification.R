@@ -284,6 +284,46 @@
       compute()
   } # Merge hospital blocks for all relevant CLIF tables
   
+  { # Ensure all time data structure are the same between tables
+    cat("Ensure all time data structure are the same between tables\n")
+    
+    cat("     > clif_hospitalization...\n")
+    clif_hospitalization <- clif_hospitalization |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_adt...\n")
+    clif_adt <- clif_adt |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_respiratory_support...\n")
+    clif_respiratory_support <- clif_respiratory_support |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_medication_admin_continuous...\n")
+    clif_medication_admin_continuous <- clif_medication_admin_continuous |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_vitals...\n")
+    clif_vitals <- clif_vitals |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_labs...\n")
+    clif_labs <- clif_labs |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+    cat("     > clif_patient_assessments...\n")
+    clif_patient_assessments <- clif_patient_assessments |>
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      compute()
+    
+  } # Ensure all time data structure are the same between tables
+  
 } # Setup
 
 { # Merge hospital blocks with patient information
