@@ -316,6 +316,42 @@
   
 } # Report covariate distributions, stratified
 
+{ # Helper functions
+  # Skip regression if not enough patients to prevent bias/errors
+  skip_small_cohort <- function(my_cohort, min_n=20){
+    if(nrow(my_cohort) < min_n){
+      return(list(to_skip = TRUE, message = "This hospital has fewer than 20 patients for regression, skipped!\n"))
+    }
+    return(list(to_skip=FALSE, message=NA))
+  }
+  
+  # Skip regression if missing baseline levels in cohort
+  skip_missing_baseline <- function(my_cohort){
+    if(levels(my_cohort$is_female)[1] != "0"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include male patients (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$code_status_full)[1] != "0"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients without full code status (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$ph_factor)[1] != "Not present"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients without pH measurements (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$sf_factor)[1] != "Not present"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients without SF measurements (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$sepsis_in_ed)[1] != "0"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients without sepsis in ED (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$era)[1] != "Post"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients after COVID (reference group), skipped!\n"))
+    }
+    if(levels(my_cohort$season)[1] != "Winter"){
+      return(list(to_skip=TRUE, message="This subset of patients does not include patients from the winter (reference group), skipped!\n"))
+    }
+    return(list(to_skip=FALSE, message=NA))
+  }
+} # Helper functions
+
 { # Run logit models (old)
   cat("Run logit models (old)\n")
   run_logit_models_old <- function(cohort_data, hosp_data, locations_incl=c("icu", "ward")){
@@ -370,26 +406,41 @@
         model_data <- all_model_data |>
           filter(first_hospital_id == hosp_data$first_hospital_id[i])
         
-        # Check if there are actual levels for era in this hospital
-        # If only one era, run without era
-        if("era" %in% covariates & length(unique(model_data$era)) <= 1){
-          cat(paste0("     This hospital has only one era, removing era from analysis\n"))
-          model_equation_no_era <- paste0(outcome, " ~ icu_admission + ", paste(covariates[covariates != "era"], collapse = " + "))
-          
-          model_1 <- glm(
-            model_equation_no_era,
-            data=model_data,
-            family=binomial
-          )
+        # Drop unused factor levels for this hospital subset
+        model_data <- droplevels(model_data)
+        
+        # Skip analysis if not enough patients
+        if(skip_small_cohort(model_data)$to_skip==TRUE){
+          cat(paste0("     ", skip_small_cohort(model_data)$message))
+          next
         }
-        # If more than one era, run with era
-        else{
-          model_1 <- glm(
-            model_equation,
-            data=model_data,
-            family=binomial
-          )
+        # Skip analysis if "baseline" level does not exist for remaining data
+        if(skip_missing_baseline(model_data)$to_skip == TRUE){
+          cat(paste0("     ", skip_missing_baseline(model_data)$message))
+          next
         }
+        
+        # Remove single-level factors from the model data
+        single_lvl <- names(which(sapply(
+          model_data[, sapply(model_data, is.factor)],
+          nlevels) < 2))
+        # Remove single-level factors from the model equation
+        problematic <- intersect(single_lvl, all.vars(as.formula(model_equation))[-1])
+        if(length(problematic) > 0){
+          cat(paste0("     Dropping single-level factors: ",
+                     paste(problematic, collapse=", "), "\n"))
+          adjusted_eq <- paste0(outcome, " ~ icu_admission + ",
+                                paste(setdiff(covariates, problematic), collapse=" + "))
+        } else {
+          adjusted_eq <- model_equation
+          cat("     All factors included\n")
+        }
+        
+        model_1 <- glm(
+          adjusted_eq,
+          data=model_data,
+          family=binomial
+        )
         
         # Marginal effects
         marginal_effects_slopes <- avg_slopes(
@@ -509,6 +560,63 @@
       cat(paste0("      > Running for ", unit,
                  " cases (n = ", nrow(model_data_unit),")...\n"))
       
+      # Drop unused factor levels for this hospital subset
+      model_data_unit <- droplevels(model_data_unit)
+      
+      # Skip analysis if not enough patients
+      if(skip_small_cohort(model_data_unit)$to_skip==TRUE){
+        cat(paste0("        ", skip_small_cohort(model_data_unit)$message))
+        return(data.frame(
+          site = site,
+          regression_model="Not attempted: sample size too small",
+          imc_capable = ifelse(strat_var == "first_hospital_id", as.character(hosp_data$imc_capable[i]),i),
+          hospital = ifelse(strat_var == "first_hospital_id", hosp_data$first_hospital_id[i],NA),
+          academic_community =ifelse(strat_var == "first_hospital_id", hosp_data$academic_community[i],NA),
+          outcome=outcome,
+          unit=unit,
+          term=NA,
+          estimate=NA,
+          std.error=NA,
+          p.value=NA,
+          n.obs=NA
+        ))
+      }
+      # Skip analysis if "baseline" level does not exist for remaining data
+      if(skip_missing_baseline(model_data_unit)$to_skip == TRUE){
+        output_message <- skip_missing_baseline(model_data_unit)$message
+        cat(paste0("        ", output_message))
+        return(data.frame(
+          site = site,
+          regression_model=paste0("Not attempted: ", output_message),
+          imc_capable = ifelse(strat_var == "first_hospital_id", as.character(hosp_data$imc_capable[i]),i),
+          hospital = ifelse(strat_var == "first_hospital_id", hosp_data$first_hospital_id[i],NA),
+          academic_community =ifelse(strat_var == "first_hospital_id", hosp_data$academic_community[i],NA),
+          outcome=outcome,
+          unit=unit,
+          term=NA,
+          estimate=NA,
+          std.error=NA,
+          p.value=NA,
+          n.obs=NA
+        ))
+      }
+      
+      # Remove single-level factors from the model data
+      single_lvl <- names(which(sapply(
+        model_data_unit[, sapply(model_data_unit, is.factor)],
+        nlevels) < 2))
+      # Remove single-level factors from the model equation
+      problematic <- intersect(single_lvl, all.vars(as.formula(model_equation_i))[-1])
+      if(length(problematic) > 0){
+        cat(paste0("        Dropping single-level factors: ",
+                   paste(problematic, collapse=", "), "\n"))
+        adjusted_eq <- paste0(outcome, " ~ ",
+                              paste(setdiff(covariates, problematic), collapse=" + "))
+      } else {
+        adjusted_eq <- model_equation_i
+        cat("        All factors included\n")
+      }
+      
       # Record which model was used
       used_model <- NA
       
@@ -516,7 +624,7 @@
       tryCatch({
         cat("            > Attempting GLM... ")
         unit_model <- glm(
-          model_equation_i,
+          adjusted_eq,
           data=model_data_unit,
           family=binomial
         )
@@ -572,41 +680,27 @@
         ))
       }
       
-      term_list <- switch(
-        used_model,
-        "GLM" = names(unit_model$coeff),
-        "logistf" = unit_model$terms,
-        "ridge" = names(coef(unit_model)),
-        NA
-      )
-      estimate_list <- switch(
-        used_model,
-        "GLM" = unit_model$coeff,
-        "logistf" = unit_model$coefficients,
-        "ridge" = coef(unit_model),
-        NA
-      )
-      std.error_list <- switch(
-        used_model,
-        "GLM" = summary(unit_model)$coefficients[,"Std. Error"],
-        "logistf" = sqrt(diag(unit_model$var)),
-        "ridge" = NaN,
-        NA
-      )
-      p.value_list <- switch(
-        used_model,
-        "GLM" = summary(unit_model)$coefficients[,"Pr(>|z|)"],
-        "logistf" = unit_model$prob,
-        "ridge" = NaN,
-        NA
-      )
-      n.obs_list <- switch(
-        used_model,
-        "GLM" = nobs(unit_model),
-        "logistf" = unit_model$n,
-        "ridge" = length(unit_model$y),
-        NA
-      )
+      if(used_model=="GLM"){
+        summ_coef      <- summary(unit_model)$coefficients
+        term_list      <- rownames(summ_coef)
+        estimate_list  <- summ_coef[, "Estimate"]
+        std.error_list <- summ_coef[, "Std. Error"]
+        p.value_list   <- summ_coef[, "Pr(>|z|)"]
+        n.obs_list     <- nobs(unit_model)
+      } else if(used_model == "logistf") {
+        term_list      <- unit_model$terms
+        estimate_list  <- unit_model$coefficients
+        std.error_list <- sqrt(diag(unit_model$var))
+        p.value_list   <- unit_model$prob
+        n.obs_list     <- unit_model$n
+      }else{
+        term_list      <- NA
+        estimate_list  <- NA
+        std.error_list <- NA
+        p.value_list   <- NA
+        n.obs_list     <- NA
+        
+      }
       
       regression_output <- data.frame(
         site=site,
@@ -651,23 +745,13 @@
           model_data <- cohort_data |> 
             filter(first_hospital_id == hosp_data$first_hospital_id[i])
           
-          # If only one era, run without era
-          if("era" %in% covariates & length(unique(model_data$era)) <= 1){
-            cat("     This hospital has only one era, removing era from analysis\n")
-            model_equation_i <-  paste0(outcome, " ~ ", paste(covariates[covariates != "era"], collapse = " + "))
-          }
-          # If more than one era, run with era
-          else{
-            model_equation_i <- model_equation
-          }
-          
           model_output <- model_output |>
-            add_row(run_regression_per_unit(model_data, "icu", i, model_equation_i))|>
-            add_row(run_regression_per_unit(model_data, "ward", i, model_equation_i))
+            add_row(run_regression_per_unit(model_data, "icu", i, model_equation))|>
+            add_row(run_regression_per_unit(model_data, "ward", i, model_equation))
           
           if(hospital_data$imc_capable[i] == 1){
             model_output <- model_output |>
-              add_row(run_regression_per_unit(model_data, "stepdown", i, model_equation_i))
+              add_row(run_regression_per_unit(model_data, "stepdown", i, model_equation))
           }
           else{
             cat(paste0("      > Not IMC capable\n"))
@@ -781,20 +865,43 @@
       model_data <- all_model_data |>
         filter(first_hospital_id == hosp_data$first_hospital_id[i])
       
-      if("era" %in% covariates & length(unique(model_data$era)) <= 1){
-        cat("     This hospital has only one era, removing era from analysis\n")
-        model_equation_i <- paste0("icu_admission ~ ", paste(covariates[covariates != "era"], collapse = " + "))
+      # Drop unused factor levels for this hospital subset
+      model_data <- droplevels(model_data)
+      
+      # Skip analysis if not enough patients
+      if(skip_small_cohort(model_data)$to_skip==TRUE){
+        cat(paste0("     ", skip_small_cohort(model_data)$message))
+        next
       }
-      else{
-        model_equation_i <- model_equation
+      # Skip analysis if "baseline" level does not exist for remaining data
+      if(skip_missing_baseline(model_data)$to_skip == TRUE){
+        cat(paste0("     ", skip_missing_baseline(model_data)$message))
+        next
       }
       
-      # Run logistic regression
+      # Remove single-level factors from the model data
+      single_lvl <- names(which(sapply(
+        model_data[, sapply(model_data, is.factor)],
+        nlevels) < 2))
+      # Remove single-level factors from the model equation
+      problematic <- intersect(single_lvl, all.vars(as.formula(model_equation))[-1])
+      if(length(problematic) > 0){
+        cat(paste0("     Dropping single-level factors: ",
+                   paste(problematic, collapse=", "), "\n"))
+        adjusted_eq <- paste0("icu_admission ~ ",
+                              paste(setdiff(covariates, problematic), collapse=" + "))
+      } else {
+        adjusted_eq <- model_equation
+        cat("     All factors included\n")
+      }
+      
       model_1 <- glm(
-        model_equation_i,
+        adjusted_eq,
         data=model_data,
         family=binomial
       )
+      
+      summ_coef <- summary(model_1)$coefficients
       
       model_output <- model_output |>
         add_row(data.frame(
@@ -802,10 +909,10 @@
           hospital =hosp_data$first_hospital_id[i],
           imc_capable = as.character(hosp_data$imc_capable[i]),
           academic_community = hosp_data$academic_community[i],
-          term=names(model_1$coeff),
-          estimate=model_1$coeff,
-          std.error=summary(model_1)$coefficients[,"Std. Error"],
-          p.value=summary(model_1)$coefficients[,"Pr(>|z|)"],
+          term=rownames(summ_coef),
+          estimate=summ_coef[,"Estimate"],
+          std.error=summ_coef[,"Std. Error"],
+          p.value=summ_coef[,"Pr(>|z|)"],
           n.obs=nobs(model_1)
         ))
       
