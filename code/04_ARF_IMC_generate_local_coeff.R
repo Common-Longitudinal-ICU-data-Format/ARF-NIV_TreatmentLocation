@@ -642,7 +642,7 @@
         tryCatch({
           cat("            > Attempting logistf... ")
           unit_model <- logistf(
-            model_equation_i,
+            adjusted_eq,
             data=model_data_unit,
             family=binomial,
             control = logistf.control(
