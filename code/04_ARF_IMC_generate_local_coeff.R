@@ -443,14 +443,14 @@
         )
         
         # Marginal effects
-        marginal_effects_slopes <- avg_slopes(
+        marginal_effects_slopes <- avg_comparisons(
           model=model_1,
+          variables="icu_admission",
           newdata = datagrid(
             #model=model_1,
             newdata=model_data,
             grid_type="counterfactual",
-            icu_admission=c(0,1),
-            variables="icu_admission"
+            icu_admission=c(0,1)
           )
         ) |>
           filter(term=="icu_admission")
