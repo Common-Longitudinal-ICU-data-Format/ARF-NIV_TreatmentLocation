@@ -384,6 +384,24 @@ units <- c("icu", "ward", "stepdown")
   
 } # Identify where the stepup occured
 
+{ # Output timeline for each hospital
+  cat("Outputting first and last month of admissions for each hopsital\n")
+  
+  hospitalization_date_range <- final_cohort |>
+    arrange(first_hospital_id, start_ed) |>
+    group_by(first_hospital_id) |>
+    summarize(
+      year_start = first(year(start_ed)),
+      month_start = first(month(start_ed)),
+      year_end = last(year(start_ed)),
+      month_end = last(month(start_ed))
+    ) |>
+    ungroup()
+  
+  write_csv(hospitalization_date_range, file.path(project_location, paste0(site, "_project_output/", site, "_hospitalization_date_range.csv")))
+  
+} # Output timeline for each hospital
+
 { # Compare row-level data to summary coeff
   
   # Create function that reshapes patient row-level data to match covariate structure
