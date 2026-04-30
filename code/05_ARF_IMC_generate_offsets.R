@@ -9,7 +9,8 @@ units <- c("icu", "ward", "stepdown")
       "tidyverse",
       "yaml",
       "rprojroot",
-      "stringr"
+      "stringr",
+      "arrow"
     )
     
     install_if_missing <- function(package) {
@@ -37,6 +38,7 @@ units <- c("icu", "ward", "stepdown")
     project_location <- config$project_location
     site <- config$institution
     site_time_zone <- config$time_zone
+    file_type <- config$file_type
     
     covariates <- global_config$covariates
     outcomes_binary <- global_config$outcomes_binary
@@ -188,7 +190,199 @@ units <- c("icu", "ward", "stepdown")
     
   } # Reading in and reformatting data
   
+  { # Reading in CLIF tables
+    { # Load the Required CLIF Tables
+      cat("Load the Required CLIF Tables\n")
+      #List of table names from CLIF 2.0
+      tables <- c("patient", "hospitalization", "vitals", "labs", 
+                  "medication_admin_continuous", "adt", 
+                  "patient_assessments", "respiratory_support", "position", 
+                  "dialysis", "intake_output", "ecmo_mcs", "procedures", 
+                  "admission_diagnosis", "provider", "sensitivity", 
+                  "medication_orders", "medication_admin_intermittent", 
+                  "therapy_details", "microbiology_culture", "sensitivity", "microbiology_nonculture", "hospital_diagnosis")
+      
+      # Tables that should be set to TRUE for this project
+      true_tables <- c("adt")
+      
+      # Create a named vector and set the boolean values
+      table_flags <- setNames(tables %in% true_tables, tables)
+      
+      
+      # List all CLIF files in the directory
+      clif_table_filenames <- list.files(path = tables_location, 
+                                         pattern = paste0("^clif_.*\\.", file_type, "$"), 
+                                         full.names = TRUE)
+      
+      # Extract the base names of the files (without extension)
+      clif_table_basenames <- basename(clif_table_filenames) |>
+        str_remove(paste0("\\.", file_type, "$"))
+      
+      # Create a lookup table for required files based on table_flags
+      required_files <- paste0("clif_", names(table_flags)[table_flags])
+      
+      # Check if all required files are present
+      missing_tables <- setdiff(required_files, clif_table_basenames)
+      if (length(missing_tables) > 0) {
+        stop(paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")))
+      }
+      
+      # Filter only the filenames that are required
+      required_filenames <- clif_table_filenames[clif_table_basenames %in% required_files]
+      
+      # Define the cast function to convert large_string to string
+      cast_large_utf8_to_utf8 <- function(x) {
+        # Only applies to Arrow objects that have a schema()
+        # (open_dataset() returns an Arrow Dataset / query)
+        sch <- arrow::schema(x)
+        
+        large_cols <- vapply(
+          sch$fields,
+          function(f) f$type$ToString() %in% c("large_string", "large_utf8"),
+          logical(1)
+        )
+        
+        cols_to_cast <- sch$names[large_cols]
+        if (length(cols_to_cast) == 0) return(x)
+        
+        x %>% mutate(across(all_of(cols_to_cast), ~ arrow::cast(.x, arrow::utf8())))
+      }
+      
+      # Read the required files into a list of data frames
+      if (file_type == "parquet") {
+        data_list <- lapply(required_filenames, open_dataset)
+        # Apply cast function to normalize Arrow string types right after import
+        data_list <- lapply(data_list, cast_large_utf8_to_utf8)
+      } else if (file_type == "csv") {
+        data_list <- lapply(required_filenames, read_csv)
+      } else if (file_type == "fst") {
+        data_list <- lapply(required_filenames, read.fst)
+      } else {
+        stop("Unsupported file format")
+      }
+      
+      # Assign the data frames to variables based on their file names
+      for (i in seq_along(required_filenames)) {
+        # Extract the base name of the file (without extension)
+        object_name <- str_remove(basename(required_filenames[i]), paste0("\\.", file_type, "$"))
+        # Make the object name valid for R (replace invalid characters with underscores)
+        object_name <- make.names(object_name)
+        # Assign the tibble to a variable with the name of the file
+        assign(object_name, data_list[[i]])
+      }
+    } # Load the Required CLIF Tables
+    
+    { # Merge with hospital block
+    cat("Merging adt with hospital block ID\n")
+    
+    # Hospital block to hospitalization id key
+    hospital_block_key <- read_csv(paste0(project_location, "/private_tables/hospital_block_key.csv"), show_col_types=FALSE)
+    
+    hospital_block_key_obj <- 
+      arrow::arrow_table(
+        hospital_block_key |>
+          select(patient_id,
+                 hospitalization_id,
+                 hospital_block_id,
+                 block_start_admit,
+                 block_end_discharge,
+                 discharge_location) |>
+          # ensure same datatype
+          mutate(patient_id = as.character(patient_id),
+                 hospitalization_id = as.character(hospitalization_id)))
+    
+    clif_adt <- clif_adt |>
+      select(hospitalization_id, hospital_id, hospital_type, in_dttm, out_dttm, location_name, location_category, location_type) |>
+      # ensure same datatype
+      mutate(hospitalization_id = as.character(hospitalization_id)) |>
+      # Ensure all time data structure are the same between tables 
+      mutate(across(ends_with("dttm"), ~ cast(.x, timestamp("us", timezone=site_time_zone)))) |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    } # Merge with hospital block
+    
+  } # Reading in CLIF tables
+  
 } # Setup
+
+{ # Identify where the stepup occured
+  cat("Identifying where the stepup occured\n")
+  escalated_cases <- final_cohort |>
+    filter(was_escalated==1) |>
+    select(hospital_block_id, start_ed, stop_ed, triage_location, first_hospital_id, imc_capable)
+  
+  
+  cat("Merging with adt\n")
+  all_escalations <- arrow::arrow_table(escalated_cases) |>
+    left_join(clif_adt |>
+                select(hospital_block_id, in_dttm, location_category),
+              by="hospital_block_id") |>
+    collect() |>
+    filter(in_dttm > stop_ed) |>
+    mutate(
+        triage_rank = case_when(
+          tolower(triage_location) == "ward" ~ 1,
+          tolower(triage_location) == "stepdown" ~ 2,
+          tolower(triage_location) == "icu" ~ 3,
+          TRUE ~ 0
+        ),
+        adt_rank = case_when(
+          tolower(location_category) == "ward" ~ 1,
+          tolower(location_category) == "stepdown" ~ 2,
+          tolower(location_category) == "icu" ~ 3,
+          TRUE ~ 0
+        )
+    ) |>
+    filter(adt_rank > triage_rank)
+  
+  highest_lvl_care <- function(df, hours_in=NA){
+    if(!is.na(hours_in)){
+      df <- df |>
+        filter(in_dttm <= stop_ed + hours(hours_in))
+    }
+    
+    df <- df |>
+      group_by(hospital_block_id)|>
+      arrange(desc(adt_rank), in_dttm) |> # max rank first, then earliest time
+      slice(1) |> # take the best row per group
+      ungroup() |>
+      select(hospital_block_id, first_hospital_id, imc_capable, triage_location, escalation_location=location_category)
+    
+    return(df)
+  }
+  
+  within_hospitalization <- highest_lvl_care(all_escalations) |>
+    left_join(highest_lvl_care(all_escalations, 24)|>
+                select(hospital_block_id, escalation_location_24=escalation_location), by="hospital_block_id")|>
+    left_join(highest_lvl_care(all_escalations, 48)|>
+                select(hospital_block_id, escalation_location_48=escalation_location), by="hospital_block_id") |>
+    mutate(triage_location_formatted =
+             case_when(
+               tolower(triage_location) == "stepdown" ~ "IMC",
+               imc_capable == 1 & tolower(triage_location) == "ward" ~ "Ward (+)",
+               imc_capable == 0 & tolower(triage_location) == "ward" ~ "Ward (-)",
+               TRUE ~ "ERROR"
+             ))
+  
+  
+  cat("Outputting where escalation in level of care occured\n")
+  within_hospitalization_output <- within_hospitalization |>
+    select(triage_location_formatted,
+           escalation_location,
+           escalation_location_24,
+           escalation_location_48) |>
+    pivot_longer(
+      cols = starts_with("escalation_location"),
+      names_to = "timepoint",
+      values_to = "escalation"
+    ) |>
+    count(triage_location_formatted, timepoint, escalation, name = "n") |>
+    arrange(triage_location_formatted, timepoint, desc(n)) |>
+    filter(!is.na(escalation))
+  
+  write_csv(within_hospitalization_output, file.path(project_location, paste0(site, "_project_output/", site, "_escalation_locations.csv")))
+  
+} # Identify where the stepup occured
 
 { # Compare row-level data to summary coeff
   

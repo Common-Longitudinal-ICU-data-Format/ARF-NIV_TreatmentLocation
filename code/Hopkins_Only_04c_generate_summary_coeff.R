@@ -2,7 +2,7 @@
 # 03/04/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins", "UCMC")
+sites <- c("Hopkins", "UCMC", "emory", "NU", "OHSU", 'UMN', "UCSF", "rush", "Michigan", "penn")
 units <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -85,7 +85,8 @@ units <- c("icu", "ward", "stepdown")
                                     "_project_output/local_model_outputs/",
                                     site, "_direct_standardization_by_",
                                     strata, ".csv"), show_col_types = FALSE) |>
-                      mutate(imc_capable = as.character(imc_capable)))
+                      mutate(hospital = as.character(hospital),
+                        imc_capable = as.character(imc_capable)))
         }
         return(model_output)
       }
@@ -104,7 +105,7 @@ units <- c("icu", "ward", "stepdown")
         hospital_data <- hospital_data |>
           add_row(read_csv(paste0(project_location, site, 
                                   "_project_output/", site, "_hospital_data.csv"), show_col_types = FALSE)|>
-                    mutate(site=site, imc_capable = as.character(imc_capable)))
+                    mutate(site=site, first_hospital_id=as.character(first_hospital_id), imc_capable = as.character(imc_capable)))
       }
     } # Hospital data
     
@@ -148,6 +149,8 @@ units <- c("icu", "ward", "stepdown")
   } # Load in local results
   
 } # Setup
+
+#outcomes_binary="death_hospice"
 
 { # Set up and run meta regression
   
@@ -259,6 +262,7 @@ units <- c("icu", "ward", "stepdown")
           # Iterate over each column in the beta list
           # This corresponds to each covariate
           for(i in c(1:dim(beta_list)[2])){
+            cat(paste0("Trying ", outcome_i, " in ", unit_i, " for ", colnames(beta_list)[i],"\n"))
             meta.fit = rma.uni(na.omit(beta_list[,i]), na.omit(beta_error_list[,i])^2)
             summary_coeff[i] <- meta.fit[["beta"]][,1]
             summary_var_cov[i] <- meta.fit[["vb"]][,1]

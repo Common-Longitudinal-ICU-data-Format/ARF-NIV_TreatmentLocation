@@ -873,7 +873,7 @@
       )
     
   } # Exclusion Criteria: Any CRRT in ED
-  
+
   { # Categorizing hospitals as IMC capable
     # Create key of whether each hospital at site is IMC capable
     hospital_imc_capability <- final_cohort |>
