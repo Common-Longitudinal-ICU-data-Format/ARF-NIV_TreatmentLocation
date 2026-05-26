@@ -920,7 +920,7 @@
         n_encounters = nrow(final_cohort),
         n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
       )
-  } # Exclusion Criteria: Admitted to IMC at IMC-incapable hospital
+  } # Exclusion Criteria: Admitted to IMC-incapable hospital
   
 } # Applying inclusion and exclusion criteria
 

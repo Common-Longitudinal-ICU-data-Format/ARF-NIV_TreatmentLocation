@@ -774,9 +774,12 @@ write_csv(data.frame(
     ) +
     theme_classic() +
     theme(
-      legend.position = "top",
+      legend.position = "bottom",
       legend.direction="horizontal",
       legend.title = element_text(face = "bold"),
+      axis.title.x=element_text(size = 16),
+      axis.title.y=element_text(size = 16),
+      axis.text.y = element_text(size = 14),
       axis.text.x = element_blank(),   # hides hospital names
       axis.ticks.x = element_blank()
     )
@@ -785,7 +788,7 @@ write_csv(data.frame(
   
   ### Save as jpg to view ###
   ggsave(paste0(output_dir, "fig_1a.jpg"), 
-         plot=hosp_info_plot, width=6, height=5, dpi=300)
+         plot=hosp_info_plot, width=8, height=5, dpi=600)
   
 } # Figure 1a
 
