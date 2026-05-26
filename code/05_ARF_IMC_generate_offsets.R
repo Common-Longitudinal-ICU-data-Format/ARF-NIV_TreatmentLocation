@@ -408,18 +408,27 @@ units <- c("icu", "ward", "stepdown")
   # E.g., rather than ph_factor as 0 1 2 etc, will have ph_factorNot Measured, ph_factor>7.35, ph_factor>7.30... as 0s and 1s
   reshape_patient_covariate_cols <- function(cohort_data){
     
+    cat(paste0("Identifying covariate cols...\n"))
     # Identify which covariate columns are factors
     factor_cols <- names(cohort_data |> select(covariates))[sapply(cohort_data |> select(covariates), is.factor)]
+    # Actually, do this manually
+    # factor_cols <- c("is_female", "code_status_full", "ph_factor", "sf_factor", "sepsis_in_ed", "era", "season")
+    for(f in factor_cols){
+      cat(paste0(f,": ", paste(levels(cohort_data[[f]]), collapse=", "),"\n"))
+    }
     
+    cat(paste0("\nReshaping matrix to dummy vars...\n"))
     # Reshape matrix to be dummy variables for factors
     dummy_matrix <- model.matrix(
       ~ . - 1,
       data = cohort_data[factor_cols]
     )[,-1] |> as.data.frame()
     
+    cat(paste0("Identify which columns need to be converted back to factors...\n"))
     # Identify which columns need to be converted back to factors
     factorized_covs <- cov_names[grepl(paste(factor_cols, collapse="|"), cov_names)]
     
+    cat(paste0("Returning results...\n"))
     # Reshape overall patient row level data with factorized dummy variables
     return(cohort_data |>
       select(-all_of(factor_cols)) |>
