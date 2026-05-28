@@ -739,17 +739,24 @@ write_csv(data.frame(
   
 } # Load and output table 2
 
-{ # Figure 1a
-  fig_1a_data <- load_site_csv(site=sites[1], filename=paste0("fig_1a_data"))
+{ # Figure 1a and b
+  fig_1a_data <- load_site_csv(site=sites[1], filename=paste0("fig_1a_data")) |>
+    mutate(site=sites[1])
   
   for(site in sites[-1]){
     fig_1a_data <- fig_1a_data |>
-      add_row(load_site_csv(site=site, filename=paste0("fig_1a_data")) |> mutate(hospital=as.character(hospital)))
+      add_row(load_site_csv(site=site, filename=paste0("fig_1a_data")) |> 
+                mutate(hospital=as.character(hospital),
+                       site=site))
   }
   
+  fig_1a_data <- fig_1a_data |>
+    mutate(x_axis_label = ifelse(site %in% c("NU", "UCSF"), "*", ""))
+  
   hosp_info_tab_long <- fig_1a_data |>
+    select(-site) |>
     arrange(-pct_ICU) |>
-    select(hospital, ICU, IMC, Ward, n_total) |>
+    select(hospital, x_axis_label, ICU, IMC, Ward, n_total) |>
     pivot_longer(
       cols = c(ICU, IMC, Ward),
       names_to = "unit",
@@ -759,38 +766,63 @@ write_csv(data.frame(
            pct = n/n_total
     ) 
   
-  # Actual plot
-  hosp_info_plot <- ggplot(hosp_info_tab_long, aes(x = factor(hospital, levels = unique(hospital)),
-                                                   y = pct,
-                                                   fill = unit)) +
-    geom_bar(stat = "identity", width = 0.9) +
-    scale_fill_manual(values = TRIAGE_COLORS,
-                      name=expression(bold("Admission Unit:"))) +
-    scale_y_continuous(labels = scales::percent_format()) +
-    labs(
-      x = "Hospital",
-      y = "Percent of Admissions",
-      fill = "Unit"
-    ) +
-    theme_classic() +
-    theme(
-      legend.position = "bottom",
-      legend.direction="horizontal",
-      legend.title = element_text(face = "bold"),
-      axis.title.x=element_text(size = 16),
-      axis.title.y=element_text(size = 16),
-      axis.text.y = element_text(size = 14),
-      axis.text.x = element_blank(),   # hides hospital names
-      axis.ticks.x = element_blank()
-    )
+  make_fig_1_plot <- function(plot_data, y_val="pct"){
+    if(y_val=="pct"){
+      plot_data <- plot_data |>
+        mutate(y_lab_max = 1.03)
+      y_lab_text <- "Percent of Admissions"
+    }else{      
+      plot_data <- plot_data |>
+        mutate(y_lab_max = n_total*1.03)
+      y_lab_text <- "Number of Admissions"
+    }
+    
+    hosp_info_plot <- ggplot(plot_data, aes(x = factor(hospital, levels = unique(hospital)),
+                                                     y = .data[[y_val]],
+                                                     fill = unit)) +
+      geom_bar(stat = "identity", width = 0.9) +
+      scale_fill_manual(values = TRIAGE_COLORS,
+                        name=expression(bold("Admission Unit:"))) +
+      #scale_x_discrete(labels=setNames(plot_data$x_axis_label, plot_data$hospital)) +
+      labs(
+        x = "Hospital",
+        y = y_lab_text,
+        fill = "Unit"
+      ) +
+      theme_classic() +
+      theme(
+        legend.position = "bottom",
+        legend.direction="horizontal",
+        legend.title = element_text(face = "bold"),
+        axis.title.x=element_text(size = 16),
+        axis.title.y=element_text(size = 16),
+        axis.text.y = element_text(size = 14),
+        axis.text.x = element_blank(),   # hides hospital names
+        axis.ticks.x = element_blank()
+      ) +
+      geom_text(aes(x=hospital, y=y_lab_max, label=x_axis_label))
+    
+    if(y_val=="pct"){
+      hosp_info_plot <- hosp_info_plot +
+        scale_y_continuous(labels = scales::percent_format()) 
+    }
+    
+    return(hosp_info_plot)
+  }
   
-  hosp_info_plot
+  fig_1a <- make_fig_1_plot(hosp_info_tab_long)
+  fig_1a
+  
+  fig_1b <- make_fig_1_plot(hosp_info_tab_long, y_val="n")
+  fig_1b
   
   ### Save as jpg to view ###
   ggsave(paste0(output_dir, "fig_1a.jpg"), 
-         plot=hosp_info_plot, width=8, height=5, dpi=600)
+         plot=fig_1a, width=8, height=5, dpi=600)
+  ggsave(paste0(output_dir, "fig_1b.jpg"), 
+         plot=fig_1b, width=8, height=5, dpi=600)
   
-} # Figure 1a
+} # Figure 1a and b
 
 { # Figure 2
   fig_2a_data <- load_site_csv(site=sites[1], filename=paste0("fig_2a_data")) |>
@@ -821,6 +853,61 @@ write_csv(data.frame(
                 select(site, time_bin, physiologic_type, n_patients))
   }
   
+  time_data <- fig_2a_data |>
+    mutate(n_patients=case_when(
+      n_patients=="< 5" ~ 0,
+      TRUE ~ as.integer(n_patients)
+    )) |>
+    group_by(site, time_bin) |>
+    summarise(
+      total_time_bin = sum(n_patients),
+      .groups = "drop"
+      ) |>
+    ungroup()|>
+    arrange(site, time_bin) |>
+    group_by(site) |>
+    mutate(
+      has_time_bin = as.integer(total_time_bin>0),
+      in_registry = as.integer(
+        cumsum(has_time_bin) > 0 &
+          rev(cumsum(rev(has_time_bin))) > 0
+      )
+    ) |>
+    ungroup()
+  
+  time_data_sum <- time_data |>
+    filter(in_registry==1)|>
+    group_by(time_bin) |>
+    summarize(n_hosp = n()) 
+  
+  fig_2d <- ggplot(time_data_sum, aes(
+    x = time_bin,
+    y = n_hosp)) +
+    geom_col(width = 25) + # adjust width as needed for monthly bins
+    labs(
+      title = "CLIF Sites Contributing Data",
+      x = "Date",
+      y = "Number of CLIF Sites",
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 16) +
+    scale_y_continuous(
+      breaks = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+      limits = c(0, 11)
+    ) +
+    theme(
+      legend.position = "top",
+      plot.title = element_text(hjust = 0.5)
+    )
+  fig_2d
+  ggsave(
+    filename = paste0(output_dir,"fig_2d.jpg"),
+    plot = fig_2d,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+  
   fig_2a_data_plot <- fig_2a_data |>
     mutate(n_patients=case_when(
       n_patients=="< 5" ~ 0,
@@ -829,7 +916,14 @@ write_csv(data.frame(
     group_by(time_bin, triage_location_formatted) |>
     summarise(
       n_patients_total=sum(n_patients)
-    )
+    ) |>
+    ungroup()|>
+    group_by(time_bin) |>
+    mutate(n_time_bin = sum(n_patients_total)) |>
+    ungroup()|>
+    mutate(pct = 100*n_patients_total/n_time_bin)
+  
+  
   fig_2b_data_plot <- fig_2b_data |>
     mutate(n_patients=case_when(
       n_patients=="< 5" ~ 0,
@@ -838,7 +932,13 @@ write_csv(data.frame(
     group_by(time_bin, last_niv_device) |>
     summarise(
       n_patients_total=sum(n_patients)
-    )
+    )|>
+    ungroup()|>
+    group_by(time_bin) |>
+    mutate(n_time_bin = sum(n_patients_total)) |>
+    ungroup()|>
+    mutate(pct = 100*n_patients_total/n_time_bin)
+  
   fig_2c_data_plot <- fig_2c_data |>
     mutate(n_patients=case_when(
       n_patients=="< 5" ~ 0,
@@ -847,86 +947,63 @@ write_csv(data.frame(
     group_by(time_bin, physiologic_type) |>
     summarise(
       n_patients_total=sum(n_patients)
-    )
+    )|>
+    ungroup()|>
+    group_by(time_bin) |>
+    mutate(n_time_bin = sum(n_patients_total)) |>
+    ungroup()|>
+    mutate(pct = 100*n_patients_total/n_time_bin)
   
   
-  fig_2a_plot <- ggplot(fig_2a_data_plot, aes(
-    x = time_bin,
-    y = n_patients_total,
-    fill = triage_location_formatted
-  )) +
-    geom_col(width = 25) + # adjust width as needed for monthly bins
-    scale_fill_manual(values = TRIAGE_COLORS) +
-    labs(
-      title = "Initial Admission Location",
-      x = "Date",
-      y = "Number of Encounters",
-      fill = NULL
-    ) +
-    theme_minimal(base_size = 16) +
-    theme(
-      legend.position = "top",
-      plot.title = element_text(hjust = 0.5)
-    )
-  ggsave(
-    filename = paste0(output_dir,"fig_2a.jpg"),
-    plot = fig_2a_plot,
-    width = 8,
-    height = 6,
-    dpi = 300
-  )
   
-  fig_2b_plot <- ggplot(fig_2b_data_plot, aes(
-    x = time_bin,
-    y = n_patients_total,
-    fill = last_niv_device
-  )) +
-    geom_col(width = 25) + # adjust width as needed for monthly bins
-    scale_fill_manual(values = c("orange", "cadetblue")) +
-    labs(
-      title = "NIV Type",
-      x = "Date",
-      y = "Number of Encounters",
-      fill = NULL
-    ) +
-    theme_minimal(base_size = 16) +
-    theme(
-      legend.position = "top",
-      plot.title = element_text(hjust = 0.5)
+  fig_2_plot_generation <- function(plot_data, y_column, fill_column, 
+                                    fill_colors, plot_title, y_axis_title, panel){
+    fig_2_plot <- ggplot(plot_data, aes(
+      x = time_bin,
+      y = !!sym(y_column),
+      fill = !!sym(fill_column)
+    )) + 
+      geom_col(width = 25) + # adjust width as needed for monthly bins
+      scale_fill_manual(values=fill_colors) + 
+      labs(
+        title = plot_title,
+        x = "Date",
+        y = y_axis_title,
+        fill = NULL
+      ) +
+      theme_minimal(base_size = 16) +
+      theme(
+        legend.position = "top",
+        plot.title = element_text(hjust = 0.5)
+      )
+    
+    ggsave(
+      filename = paste0(output_dir,"fig_2", panel,".jpg"),
+      plot = fig_2_plot,
+      width = 8,
+      height = 6,
+      dpi = 300
     )
-  ggsave(
-    filename = paste0(output_dir,"fig_2b.jpg"),
-    plot = fig_2b_plot,
-    width = 8,
-    height = 6,
-    dpi = 300
-  )
+    
+    return(fig_2_plot)
+  }
   
-  fig_2c_plot <- ggplot(fig_2c_data_plot, aes(
-    x = time_bin,
-    y = n_patients_total,
-    fill = physiologic_type
-  )) +
-    geom_col(width = 25) + # adjust width as needed for monthly bins
-    scale_fill_manual(values =  c("lightblue", "plum1", "lavender", "khaki", "grey")) +
-    labs(
-      title = "Physiologic Type",
-      x = "Date",
-      y = "Number of Encounters",
-      fill = NULL
-    ) +
-    theme_minimal(base_size = 16) +
-    theme(
-      legend.position = "top",
-      plot.title = element_text(hjust = 0.5)
-    )
-  ggsave(
-    filename = paste0(output_dir,"fig_2c.jpg"),
-    plot = fig_2c_plot,
-    width = 8,
-    height = 6,
-    dpi = 300
-  )
+  
+  fig_2_plot_generation(fig_2a_data_plot, "n_patients_total", "triage_location_formatted",
+                        TRIAGE_COLORS, "Initial Admission Location", "Number of Encounters", "a")
+  fig_2_plot_generation(fig_2b_data_plot, "n_patients_total", "last_niv_device",
+                        c("orange", "cadetblue"), "NIV Type", "Number of Encounters", "b")
+  fig_2_plot_generation(fig_2c_data_plot, "n_patients_total", "physiologic_type",
+                        c("lightblue", "plum1", "lavender", "khaki", "grey"),
+                        "Physiologic Type", "Number of Encounters", "c")
+  
+  fig_2_plot_generation(fig_2a_data_plot, "pct", "triage_location_formatted",
+                        TRIAGE_COLORS, "Initial Admission Location", "Percent of Encounters", "ai")
+  fig_2_plot_generation(fig_2b_data_plot, "pct", "last_niv_device",
+                        c("orange", "cadetblue"), "Initial Admission Location", "Percent of Encounters", "bi")
+  fig_2_plot_generation(fig_2c_data_plot, "pct", "physiologic_type",
+                        c("lightblue", "plum1", "lavender", "khaki", "grey"),
+                          "Initial Admission Location", "Percent of Encounters", "ci")
   
   
 } # Figure 2

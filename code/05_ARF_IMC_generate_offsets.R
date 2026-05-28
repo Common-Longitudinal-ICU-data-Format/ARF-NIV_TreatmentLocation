@@ -111,8 +111,8 @@ units <- c("icu", "ward", "stepdown")
                  
                  imc_capable = factor(imc_capable),
                  
-                 # Set sepsis as factor
-                 sepsis_in_ed = as.factor(sepsis_in_ed),
+                 # Set sepsis as factor, force levels
+                 sepsis_in_ed = factor(sepsis_in_ed, levels=c("0", "1")),
                  
                  # Set code status as full/presumed full vs other
                  code_status_full = as.factor(case_when(
