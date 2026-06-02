@@ -39,7 +39,7 @@ dependencies = [
     "pandas==2.3.2", 
     "duckdb==1.4.0",
     "pyarrow==21.0.0",       
-    "clifpy==0.3.8",        
+    "clifpy==0.4.9",        
     "pyyaml>=6.0",          
     "jupyter",       
     "ipykernel",     
