@@ -75,6 +75,7 @@ units <- c("icu", "ward", "stepdown")
       
       return(df |>
                mutate(
+                 first_hospital_id = character(first_hospital_id),
                  triage_location = factor(triage_location),
                  # Format triage location
                  triage_location_formatted = case_when(
