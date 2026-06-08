@@ -66,7 +66,8 @@ units_all <- c("icu", "ward", "stepdown")
     final_cohort <- read_csv(paste0(
       project_location, 
       "/private_tables/model_data.csv"), 
-      show_col_types=FALSE)
+      show_col_types=FALSE) |>
+      mutate(first_hospital_id = as.character(first_hospital_id))
     
     # gamma blups (predicted log odds of death at each hospital) (determined in file 5b)
     hospital_effect_all <- read_csv(paste0(
