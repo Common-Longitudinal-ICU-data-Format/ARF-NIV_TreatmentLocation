@@ -2,7 +2,7 @@
 # 03/09/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins", "UCMC")
+sites <- c("Hopkins", "UCMC", "emory", "NU", "OHSU", 'UMN', "UCSF", "rush", "Michigan", "penn")
 units <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -61,6 +61,7 @@ units <- c("icu", "ward", "stepdown")
       #n_patients = integer(),
       imc_capable = character(),
       academic_community = character(),
+      site=character(),
       stringsAsFactors = FALSE
     )
     
@@ -72,7 +73,9 @@ units <- c("icu", "ward", "stepdown")
                                 "_hospital_data.csv"),
                          show_col_types = FALSE) |>
                   select(-c(n_patients)) |>
-                  mutate(imc_capable = as.character(imc_capable)))
+                  mutate(site=site,
+                    imc_capable = as.character(imc_capable),
+                         first_hospital_id = as.character(first_hospital_id)))
     }
     
   } # Load all hospital data
@@ -112,11 +115,13 @@ units <- c("icu", "ward", "stepdown")
         site, "_project_output/local_model_outputs/",
         site,"_", measure, "_by_", stratum, ".csv"),
         show_col_types =FALSE) |>
-          mutate(measure=measure, site=site))
+          mutate(first_hospital_id=as.character(first_hospital_id),measure=measure, site=site))
     }
     
     # Iterate over each site and read in the gamma values
     for(site in sites){
+      cat(paste0(site,"\n"))
+      cat(paste0("     > Reading in gamma by hosp...\n"))
       gamma_by_hosp <- gamma_by_hosp |>
         add_row(read_in_gammas("gamma", "hosp", site)) |>
         add_row(read_in_gammas("gamma_error", "hosp", site))
@@ -125,25 +130,30 @@ units <- c("icu", "ward", "stepdown")
       #   add_row(read_in_gammas("gamma", "imc_cap", site)) |>
       #   add_row(read_in_gammas("gamma_error", "imc_cap", site))
       
+      cat(paste0("     > Reading in hospital data...\n"))
       hospital_data <- read_csv(paste0(
         project_location,site, "_project_output/", site,"_hospital_data.csv"
       ),
                                 show_col_types =FALSE)
       
-      if(nrow(hospital_data|>filter(imc_capable==1))){
+      if(site %in% c("Hopkins", "UCMC", "OHSU") & # , "UCSF") & # Removed UCSF since ICU only
+         nrow(hospital_data|>filter(imc_capable==1))){
+        
+        cat(paste0("     > Reading in IMC vs ICU data...\n"))
+        
         imc_vs_icu_gamma <- imc_vs_icu_gamma |>
           add_row(read_csv(paste0(
             project_location,
             site, "_project_output/local_model_outputs/",
             site,"_imc_vs_icu_gamma.csv"),
             show_col_types =FALSE) |>
-              mutate(measure="gamma", site=site)) |>
+              mutate(first_hospital_id=as.character(first_hospital_id),measure="gamma", site=site)) |>
           add_row(read_csv(paste0(
             project_location,
             site, "_project_output/local_model_outputs/",
             site,"_imc_vs_icu_gamma_error.csv"),
             show_col_types =FALSE) |>
-              mutate(measure="gamma_error", site=site))
+              mutate(first_hospital_id=as.character(first_hospital_id),measure="gamma_error", site=site))
       }
 
     }

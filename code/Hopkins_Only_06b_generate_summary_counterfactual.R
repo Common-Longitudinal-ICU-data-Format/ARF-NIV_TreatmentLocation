@@ -2,7 +2,7 @@
 # 03/09/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins", "UCMC")
+sites <- c("Hopkins")
 units_all <- c("icu", "ward", "stepdown")
 
 { # Setup

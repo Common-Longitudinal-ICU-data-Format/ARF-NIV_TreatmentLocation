@@ -750,6 +750,9 @@ write_csv(data.frame(
                        site=site))
   }
   
+  n_hosp <- nrow(fig_1a_data)
+  n_site <- length(unique(fig_1a_data |> pull(site)))
+  
   fig_1a_data <- fig_1a_data |>
     mutate(x_axis_label = ifelse(site %in% c("NU", "UCSF"), "*", ""))
   
