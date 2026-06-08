@@ -171,7 +171,8 @@ units <- c("icu", "ward", "stepdown")
     
     hospital_data <- read_csv(paste0(project_location,"/", 
                                      site, "_project_output/", site,"_hospital_data.csv"), 
-                              show_col_types=FALSE)
+                              show_col_types=FALSE) |>
+      mutate(first_hospital_id = as.character(first_hospital_id))
     
     meta_hosp <- read_csv(paste0(project_location, 
                                  "/global_model_outputs/global_coeff_by_hosp.csv"),
