@@ -75,7 +75,6 @@ units <- c("icu", "ward", "stepdown")
       
       return(df |>
                mutate(
-                 first_hospital_id = character(first_hospital_id),
                  triage_location = factor(triage_location),
                  # Format triage location
                  triage_location_formatted = case_when(
@@ -108,7 +107,7 @@ units <- c("icu", "ward", "stepdown")
                  # Binary variable if patient died or discharged to hospice at all
                  death_hospice = ifelse(in_hosp_death == 1 | hospice == 1, 1, 0),
                  
-                 first_hospital_id = factor(first_hospital_id),
+                 first_hospital_id = factor(as.character(first_hospital_id)),
                  
                  imc_capable = factor(imc_capable),
                  
