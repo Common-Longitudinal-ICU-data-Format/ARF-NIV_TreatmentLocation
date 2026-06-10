@@ -23,7 +23,8 @@ options(scipen = 999)
       "tidyverse",
       "yaml",
       "rprojroot",
-      "metafor"
+      "metafor",
+      "patchwork"
     )
     
     install_if_missing <- function(package) {
@@ -741,20 +742,43 @@ write_csv(data.frame(
 
 { # Figure 1a and b
   fig_1a_data <- load_site_csv(site=sites[1], filename=paste0("fig_1a_data")) |>
-    mutate(site=sites[1])
+    mutate(site=sites[1]) |>
+    # Old version of imc capable remove
+    select(-imc_capable)
+  
+  hosp_data <- load_site_csv(site=sites[1], filename=paste0("hospital_data"))
   
   for(site in sites[-1]){
     fig_1a_data <- fig_1a_data |>
       add_row(load_site_csv(site=site, filename=paste0("fig_1a_data")) |> 
                 mutate(hospital=as.character(hospital),
-                       site=site))
+                       site=site)|>
+                # Old version of imc capable remove
+                select(-imc_capable))
+    
+    hosp_data <- hosp_data |>
+      add_row(load_site_csv(site=site, filename=paste0("hospital_data"))|>
+                mutate(first_hospital_id=as.character(first_hospital_id)))
   }
+  
+  fig_1a_data <- fig_1a_data |>
+    left_join(hosp_data|>select(hospital=first_hospital_id, imc_capable), 
+              by="hospital")
   
   n_hosp <- nrow(fig_1a_data)
   n_site <- length(unique(fig_1a_data |> pull(site)))
   
   fig_1a_data <- fig_1a_data |>
-    mutate(x_axis_label = ifelse(site %in% c("NU", "UCSF"), "*", ""))
+    mutate(x_axis_label = 
+             ifelse(site %in% c("NU", "UCSF"), 
+                    # In NU or UCSF
+                    ifelse(imc_capable==1,
+                           # IMC capable
+                           "*",
+                           # IMC incapable
+                           "†"), 
+                    # Not in NU or UCSF
+                    ""))
   
   hosp_info_tab_long <- fig_1a_data |>
     select(-site) |>
@@ -769,7 +793,9 @@ write_csv(data.frame(
            pct = n/n_total
     ) 
   
-  make_fig_1_plot <- function(plot_data, y_val="pct"){
+  
+  
+  make_fig_1_plot <- function(plot_data, y_val="pct", fill="unit"){
     if(y_val=="pct"){
       plot_data <- plot_data |>
         mutate(y_lab_max = 1.03)
@@ -777,16 +803,18 @@ write_csv(data.frame(
     }else{      
       plot_data <- plot_data |>
         mutate(y_lab_max = n_total*1.03)
-      y_lab_text <- "Number of Admissions"
+      if(fill=="unit"){
+        y_lab_text <- "Number of Admissions"
+      }
+      else{
+        y_lab_text <- "n"
+      }
     }
     
     hosp_info_plot <- ggplot(plot_data, aes(x = factor(hospital, levels = unique(hospital)),
                                                      y = .data[[y_val]],
-                                                     fill = unit)) +
+                                                     fill = .data[[fill]])) +
       geom_bar(stat = "identity", width = 0.9) +
-      scale_fill_manual(values = TRIAGE_COLORS,
-                        name=expression(bold("Admission Unit:"))) +
-      #scale_x_discrete(labels=setNames(plot_data$x_axis_label, plot_data$hospital)) +
       labs(
         x = "Hospital",
         y = y_lab_text,
@@ -794,16 +822,30 @@ write_csv(data.frame(
       ) +
       theme_classic() +
       theme(
-        legend.position = "bottom",
-        legend.direction="horizontal",
-        legend.title = element_text(face = "bold"),
         axis.title.x=element_text(size = 16),
         axis.title.y=element_text(size = 16),
         axis.text.y = element_text(size = 14),
         axis.text.x = element_blank(),   # hides hospital names
         axis.ticks.x = element_blank()
-      ) +
-      geom_text(aes(x=hospital, y=y_lab_max, label=x_axis_label))
+      ) 
+    
+    if(fill=="unit"){
+      hosp_info_plot <- hosp_info_plot +
+        scale_fill_manual(values = TRIAGE_COLORS,
+                          name=expression(bold("Admission Unit:"))) +
+        theme(
+          legend.position = "bottom",
+          legend.direction="horizontal",
+          legend.title = element_text(face = "bold")
+        )+
+        geom_text(aes(x=hospital, y=y_lab_max, label=x_axis_label))
+    }else{
+      hosp_info_plot <- hosp_info_plot +
+        geom_col(fill = "grey4")+
+        theme(
+          legend.position = "none"
+        )
+    }
     
     if(y_val=="pct"){
       hosp_info_plot <- hosp_info_plot +
@@ -816,12 +858,32 @@ write_csv(data.frame(
   fig_1a <- make_fig_1_plot(hosp_info_tab_long)
   fig_1a
   
+  hosp_hist_order <- unique(hosp_info_tab_long$hospital)
+  fig_1a_extra <- make_fig_1_plot(hosp_info_tab_long|>
+                                    group_by(hospital)|>
+                                    summarize(
+                                      x_axis_label=first(x_axis_label),
+                                      n_total=first(n_total),
+                                      All="All",
+                                      n=sum(n),
+                                      pct=1,
+                                      .groups = "drop"
+                                      ) |>
+                                    arrange(match(hospital, hosp_hist_order)),
+                                  y_val="n",
+                                  fill="All"
+                                  )
+  fig_1a_extra
+  fig_1a/fig_1a_extra+plot_layout(heights=c(5,1))
+  
   fig_1b <- make_fig_1_plot(hosp_info_tab_long, y_val="n")
   fig_1b
   
   ### Save as jpg to view ###
   ggsave(paste0(output_dir, "fig_1a.jpg"), 
          plot=fig_1a, width=8, height=5, dpi=600)
+  ggsave(paste0(output_dir, "fig_1a_with_counts.jpg"), 
+         plot=(fig_1a/fig_1a_extra+plot_layout(heights=c(5,1))), width=8, height=7, dpi=600)
   ggsave(paste0(output_dir, "fig_1b.jpg"), 
          plot=fig_1b, width=8, height=5, dpi=600)
   
