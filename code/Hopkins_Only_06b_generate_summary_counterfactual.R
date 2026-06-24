@@ -395,82 +395,197 @@ rser_ci_from_site_summaries <- function(
     }
   }
   
-  # Plot caterpillar plots
-  for(outcome_i in outcomes_binary){
-    for(unit_i in c("icu", "ward")){
-      
-      plot_data <- outcome_comparisons_raw |>
-        filter(outcome == outcome_i, unit == unit_i) |>
-        mutate(
-          # Orders hospitals from lowest to highest estimate
-          clif_hospital = fct_reorder(clif_hospital, estimate),
-          
-          imc_capable = factor(
-            imc_capable,
-            levels = c(0, 1),
-            labels = c("Not IMC-capable", "IMC-capable")
-          ),
-          
-          academic_community = factor(
-            academic_community,
-            levels = c("academic", "community"),
-            labels = c("Academic", "Community")
-          )
-        )
-      
-      # Set upper y-axis limit to a nice rounded value above the max upper CI
-      upper_lim <- ceiling(max(plot_data$upper_prob, na.rm = TRUE) / 0.05) * 0.05
-      
-      p <- ggplot(
-        plot_data,
-        aes(
-          x = clif_hospital,
-          y = estimate,
-          color = imc_capable
-        )
-      ) +
-        geom_errorbar(
-          aes(
-            ymin = lower_prob,
-            ymax = upper_prob
-          ),
-          width = 0,
-          linewidth = 0.6
-        ) +
-        geom_point(
-          aes(shape = academic_community),
-          size = 2.8
-        ) +
-        scale_y_continuous(
-          labels = label_percent(accuracy = 1),
-          limits = c(0, upper_lim),
-          expand = expansion(mult = c(0, 0.02))
-        ) +
-        scale_shape_manual(
-          values = c(
-            "Academic" = 16,
-            "Community" = 17
-          )
-        ) +
-        labs(
-          x = paste0("Hospital (", ifelse(unit_i=="icu", "ICU", "ward"),")"),
-          y = paste0("Estimated probability of ", 
-                     ifelse(outcome_i=="death_hospice", "death or hospice",
-                            "progressive organ failure")),
-          color = "IMC capability",
-          shape = "Hospital type"
-        ) +
-        theme_classic() +
-        theme(
-          axis.text.x = element_blank(),   # keeps hospitals unlabelled
-          axis.ticks.x = element_blank(),
-          legend.position = "right"
-        )
-      
-      ggsave(paste0(output_dir, paste0("caterpillar_", outcome_i, "_", unit_i, ".jpg")), 
-             plot=p, width=8, height=5, dpi=600)
-      
-    }
+  run_rd <- function(df) {
+    if (length(unique(df$imc_capable)) < 2) return(NULL)   # need both groups present
+    
+    m  <- rma(yi = estimate, sei = se, mods = ~ imc_capable, data = df)
+    cs <- as.data.frame(coef(summary(m)))
+    rn <- intersect(c("imc_capable", "imc_capable1"), rownames(cs))[1]  # numeric or factor
+    b  <- cs[rn, ]
+    
+    p0 <- predict(m, newmods = 0)   # fitted proportion, non-capable
+    p1 <- predict(m, newmods = 1)   # fitted proportion, capable
+    
+    data.frame(
+      outcome = df$outcome[1],
+      unit    = df$unit[1],
+      n_hosp  = nrow(df),
+      pct_non = p0$pred  * 100,
+      pct_cap = p1$pred  * 100,
+      rd_pp   = b$estimate * 100,            # risk difference (capable - non), pp
+      lcl_pp  = b$ci.lb   * 100,
+      ucl_pp  = b$ci.ub   * 100,
+      p_value = b$pval,
+      tau2    = m$tau2,                       # residual between-hospital heterogeneity
+      row.names = NULL
+    )
   }
+  
+  results <- do.call(rbind,
+                     lapply(split(outcome_comparisons_raw, ~ outcome + unit, drop = TRUE), run_rd))
+  
+  num <- c("pct_non","pct_cap","rd_pp","lcl_pp","ucl_pp")
+  results[num]    <- round(results[num], 1)
+  results$p_value <- signif(results$p_value, 3)
+  results$tau2    <- signif(results$tau2, 3)
+  
+  print(results, row.names = FALSE)
 
 } # Group by IMC capable vs incapable
+
+{ # plot forest plots
+  
+  
+  library(ggplot2)
+  
+  # `results` = your table; output_dir <- "/your/path/"  (end with a slash)
+  
+  make_forest <- function(df, outcome_key, outcome_title) {
+    
+    d <- df[df$outcome == outcome_key, ]
+    
+    d$unit <- factor(d$unit, levels = c("ward", "icu"),
+                     labels = c("Ward", "ICU"))
+    
+    d$lab <- sprintf("%+.1f pp  (95%% CI %+.1f to %+.1f),  p = %.3f",
+                     d$rd_pp, d$lcl_pp, d$ucl_pp, d$p_value)
+    
+    xmax  <- max(abs(c(d$lcl_pp, d$ucl_pp))) + 1
+    xpad  <- xmax + 0.5
+    x_lo  <- -xmax
+    x_hi  <- xpad + xmax * 1.6
+    
+    y_arrow <- 0.55
+    y_label <- 0.20
+    
+    # --- Arrow geometry: explicit, equal-length, near each panel edge ---
+    arrow_len <- xmax * 0.45          # length of each arrow (half of before)
+    edge_pad  <- xmax * 0.10          # gap between arrow tip and panel edge
+    
+    left_out  <- x_lo + edge_pad                 # left arrow tip (points left, to edge)
+    left_in   <- left_out + arrow_len            # left arrow tail (toward center)
+    right_out <- x_hi - edge_pad                 # right arrow tip (points right, to edge)
+    right_in  <- right_out - arrow_len           # right arrow tail (toward center)
+    
+    ggplot(d, aes(x = rd_pp, y = unit)) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+      geom_errorbarh(aes(xmin = lcl_pp, xmax = ucl_pp), height = 0.15, linewidth = 0.7) +
+      geom_point(aes(size = n_hosp), shape = 15, color = "#2c3e50") +
+      geom_text(aes(x = xpad, label = lab), hjust = 0, size = 3.4) +
+      
+      # Equal-length arrows, one near each edge
+      annotate("segment", x = left_in, xend = left_out, y = y_arrow, yend = y_arrow,
+               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
+      annotate("segment", x = right_in, xend = right_out, y = y_arrow, yend = y_arrow,
+               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
+      annotate("text", x = (left_in + left_out) / 2, y = y_label,
+               label = "Favors IMC-capable", size = 3.1, color = "grey30") +
+      annotate("text", x = (right_in + right_out) / 2, y = y_label,
+               label = "Favors non-capable", size = 3.1, color = "grey30") +
+      
+      scale_size_continuous(range = c(3, 6), guide = "none") +
+      scale_x_continuous(limits = c(x_lo, x_hi), breaks = scales::pretty_breaks(5)) +
+      scale_y_discrete(expand = expansion(add = c(1.1, 0.6))) +
+      labs(
+        title = outcome_title,
+        x = "Risk difference (percentage points)",
+        y = NULL
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        plot.title         = element_text(face = "bold", hjust = 0.5),
+        panel.grid.major.y = element_blank(),
+        axis.text.y        = element_text(face = "bold"),
+        plot.background    = element_rect(fill = "white", color = NA),
+        panel.background   = element_rect(fill = "white", color = NA)
+      )
+  }
+  
+  p_death <- make_forest(results, "death_hospice",    "Death or Discharge to Hospice")
+  p_organ <- make_forest(results, "organ_failure_yn", "Progressive Organ Failure")
+  
+  ggsave(paste0(output_dir, "forest_death_hospice.png"), p_death, width = 9, height = 3.4, dpi = 300)
+  ggsave(paste0(output_dir, "forest_organ_failure.png"), p_organ, width = 9, height = 3.4, dpi = 300)
+  
+  p_death
+  p_organ
+  
+} # plot forest plots
+
+##### Plot caterpillar plots #####
+for(outcome_i in outcomes_binary){
+  for(unit_i in c("icu", "ward")){
+    
+    plot_data <- outcome_comparisons_raw |>
+      filter(outcome == outcome_i, unit == unit_i) |>
+      mutate(
+        # Orders hospitals from lowest to highest estimate
+        clif_hospital = fct_reorder(clif_hospital, estimate),
+        
+        imc_capable = factor(
+          imc_capable,
+          levels = c(0, 1),
+          labels = c("Not IMC-capable", "IMC-capable")
+        ),
+        
+        academic_community = factor(
+          academic_community,
+          levels = c("academic", "community"),
+          labels = c("Academic", "Community")
+        )
+      )
+    
+    # Set upper y-axis limit to a nice rounded value above the max upper CI
+    upper_lim <- ceiling(max(plot_data$upper_prob, na.rm = TRUE) / 0.05) * 0.05
+    
+    p <- ggplot(
+      plot_data,
+      aes(
+        x = clif_hospital,
+        y = estimate,
+        color = imc_capable
+      )
+    ) +
+      geom_errorbar(
+        aes(
+          ymin = lower_prob,
+          ymax = upper_prob
+        ),
+        width = 0,
+        linewidth = 0.6
+      ) +
+      geom_point(
+        aes(shape = academic_community),
+        size = 2.8
+      ) +
+      scale_y_continuous(
+        labels = label_percent(accuracy = 1),
+        limits = c(0, upper_lim),
+        expand = expansion(mult = c(0, 0.02))
+      ) +
+      scale_shape_manual(
+        values = c(
+          "Academic" = 16,
+          "Community" = 17
+        )
+      ) +
+      labs(
+        x = paste0("Hospital (", ifelse(unit_i=="icu", "ICU", "ward"),")"),
+        y = paste0("Estimated probability of ", 
+                   ifelse(outcome_i=="death_hospice", "death or hospice",
+                          "progressive organ failure")),
+        color = "IMC capability",
+        shape = "Hospital type"
+      ) +
+      theme_classic() +
+      theme(
+        axis.text.x = element_blank(),   # keeps hospitals unlabelled
+        axis.ticks.x = element_blank(),
+        legend.position = "right"
+      )
+    
+    ggsave(paste0(output_dir, paste0("caterpillar_", outcome_i, "_", unit_i, ".jpg")), 
+           plot=p, width=8, height=5, dpi=600)
+    
+  }
+}

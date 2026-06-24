@@ -398,8 +398,9 @@ options(scipen = 999)
   write_csv(all_table_1_5group, paste0(output_dir, "table_1_5group.csv"))
   
   
-  rm(raw_table_1_3group_cat, raw_table_1_3group_cont, # raw_table_1_5group_cat,  # Keep this one because we use it later for hospital information
-     raw_table_1_5group_cont,
+  rm(raw_table_1_3group_cat, raw_table_1_3group_cont, 
+     # raw_table_1_5group_cat,  # Keep this one because we use it later for hospital information
+     # raw_table_1_5group_cont,  # Keep this one because we use it later for hospital information
      all_table_1_3group_cat, all_table_1_3group_cat_display, all_table_1_3group_cont, all_table_1_3group_cont_display,
      all_table_1_5group_cat, all_table_1_5group_cat_display, all_table_1_5group_cont, all_table_1_5group_cont_display)
 } # Load and output table 1
@@ -435,13 +436,37 @@ options(scipen = 999)
   n_hosp_imc <- table_1_academic_comm_by_pt |>
     filter(traige_location_imc_avail == "IMC")
   
-  academic_comm_imc <- n_hosp_imc |>
-    summarize(
-      n_hosp_academic=sum(ifelse(academic_community=="academic", 1, 0)),
-      percent_hosp_academic = round(100*n_hosp_academic/n())
-    )
+  n_hosp_icu_plus <- table_1_academic_comm_by_pt |>
+    filter(traige_location_imc_avail == "ICU (+)")
+  n_hosp_icu_minus <- table_1_academic_comm_by_pt |>
+                            filter(traige_location_imc_avail == "ICU (-)")
+  n_hosp_ward_plus <- table_1_academic_comm_by_pt |>
+                            filter(traige_location_imc_avail == "Ward (+)")
+  n_hosp_ward_minus <- table_1_academic_comm_by_pt |>
+                             filter(traige_location_imc_avail == "Ward (-)")
   
+  cat(paste0("ICU (+): n = ", nrow(n_hosp_icu_plus), 
+             "\nICU(-): n = ", nrow(n_hosp_icu_minus), 
+             "\nIMC: n = ", nrow(n_hosp_imc), 
+             "\nWard (+): n = ", nrow(n_hosp_ward_plus),
+             "\nWard (-): n = ", nrow(n_hosp_ward_minus)))
   
+  academic_comm_ratio <- function(df, unit){
+    return(df|>
+             summarize(
+               unit=unit,
+               n_hosp_academic=sum(ifelse(academic_community=="academic", 1, 0)),
+               percent_hosp_academic = round(100*n_hosp_academic/n())
+             )
+           )
+  }
+  
+  academic_comm <- academic_comm_ratio(n_hosp_icu_plus, "ICU (+)") |>
+    add_row(academic_comm_ratio(n_hosp_icu_minus, "ICU (-)")) |>
+    add_row(academic_comm_ratio(n_hosp_imc, "IMC")) |>
+    add_row(academic_comm_ratio(n_hosp_ward_plus, "Ward (+)")) |>
+    add_row(academic_comm_ratio(n_hosp_ward_minus, "Ward (-)"))
+    
   
 } # Additional hospital information for table 1
 
