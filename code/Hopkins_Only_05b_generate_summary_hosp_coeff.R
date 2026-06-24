@@ -136,7 +136,7 @@ units <- c("icu", "ward", "stepdown")
       ),
                                 show_col_types =FALSE)
       
-      if(site %in% c("Hopkins", "UCMC", "OHSU") & # , "UCSF") & # Removed UCSF since ICU only
+      if(site %in% c("Hopkins", "UMN", "OHSU") & # , "UCSF") & # Removed UCSF since ICU only
          nrow(hospital_data|>filter(imc_capable==1))){
         
         cat(paste0("     > Reading in IMC vs ICU data...\n"))

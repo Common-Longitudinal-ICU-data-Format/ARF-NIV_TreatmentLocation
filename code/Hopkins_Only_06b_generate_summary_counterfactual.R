@@ -2,7 +2,7 @@
 # 03/09/2026
 
 # TODO BEFORE RUNNING: define which sites have contributed
-sites <- c("Hopkins")
+sites <- c("Hopkins", "UCMC", "emory", "NU", "OHSU", 'UMN', "UCSF", "rush", "Michigan", "penn")
 units_all <- c("icu", "ward", "stepdown")
 
 { # Setup
@@ -12,7 +12,11 @@ units_all <- c("icu", "ward", "stepdown")
       "tidyverse",
       "yaml",
       "rprojroot",
-      "metafor"
+      "metafor",
+      "dplyr",
+      "ggplot2",
+      "forcats",
+      "scales"
     )
     
     install_if_missing <- function(package) {
@@ -46,7 +50,7 @@ units_all <- c("icu", "ward", "stepdown")
   
   { # Create directories as needed
     
-    output_dir <- paste0(project_location, "/global_model_outputs/")
+    output_dir <- paste0(project_location, "/compiled_final_results/")
     
     if (!dir.exists(output_dir)) {
       dir.create(output_dir)
@@ -98,6 +102,14 @@ units_all <- c("icu", "ward", "stepdown")
       check.names=FALSE
     )
     
+    hospital_data <- data.frame(
+      first_hospital_id = character(),
+      n_patients=numeric(),
+      imc_capable=numeric(),
+      academic_community=character(),
+      stringsAsFactors = FALSE
+    )
+    
     
     
     # Iterate over each site and read in the gamma values
@@ -106,21 +118,27 @@ units_all <- c("icu", "ward", "stepdown")
         add_row(read_csv(paste0(project_location, site,
                                 "_project_output/local_model_outputs/", site,
                                 "_all_event_rates.csv"),
-                         show_col_types = FALSE))
+                         show_col_types = FALSE) |>
+                  mutate(local_hospital = as.character(local_hospital)))
       
       all_xw <- all_xw |>
         add_row(read_csv(paste0(project_location, site,
                                 "_project_output/local_model_outputs/", site,
                                 "_all_xw.csv"),
-                         show_col_types = FALSE))
+                         show_col_types = FALSE)|>
+                  mutate(local_hospital = as.character(local_hospital)))
       
-      hospital_data <- read_csv(paste0(
-        project_location,site, "_project_output/", site,"_hospital_data.csv"
-      ),
-      show_col_types =FALSE)
+      hospital_data <- hospital_data |>
+        add_row(read_csv(paste0(
+            project_location,site, "_project_output/", site,"_hospital_data.csv"
+            ),
+            show_col_types =FALSE)|>
+              mutate(first_hospital_id = as.character(first_hospital_id))
+          )
       
-      # Only read in from hospitals that are imc capable
-      if(nrow(hospital_data|>filter(imc_capable==1))){
+      # Only read in from sites that have hospitals that are imc capable
+      if(site %in% c("Hopkins", "UMN", "OHSU")){ # , "UCSF") & # Removed UCSF since ICU only, NU also ICU only
+         #if(nrow(hospital_data|>filter(imc_capable==1))){
       
         secondary_event_rates <- secondary_event_rates |>
           add_row(read_csv(paste0(project_location, site,
@@ -335,3 +353,124 @@ rser_ci_from_site_summaries <- function(
   write_csv(final_output, paste0(output_dir,"secondary_output"))
   
 } # Calculate final event rate for each hospital at each level of care for each outcome
+
+{ # Group by IMC capable vs incapable
+  outcome_comparisons_raw <- final_output |>
+    select(outcome, unit, clif_hospital,
+           estimate=p_hat,se, lower_prob, upper_prob)|>
+    left_join(hospital_data |>
+                select(first_hospital_id, hosp_size = n_patients, imc_capable, academic_community), 
+              by=c("clif_hospital"= "first_hospital_id"))
+  
+  outcome_comparisons <- data.frame(
+    outcome = character(),
+    unit = character(),
+    imc_capable = numeric(),
+    estimate = numeric(),
+    se = numeric(),
+    lower_prob = numeric(),
+    upper_prob = numeric(),
+    total_size = numeric(),
+    stringsAsFactors = F
+  )
+  
+  for(outcome_i in outcomes_binary){
+    for(unit_i in c("icu", "ward")){
+      outcome_comparisons <- outcome_comparisons |>
+        add_row(
+          outcome_comparisons_raw |>
+            filter(outcome==outcome_i & unit==unit_i) |>
+            group_by(imc_capable) |>
+            mutate(weight=hosp_size/sum(hosp_size, na.rm=T)) |>
+            summarize(
+              estimate = sum(weight * estimate, na.rm = TRUE),
+              se = sqrt(sum(weight^2 * se^2, na.rm = TRUE)),
+              lower_prob = estimate - 1.96 * se,
+              upper_prob = estimate + 1.96 * se,
+              total_size = sum(hosp_size, na.rm = TRUE)
+            ) |>
+            ungroup() |>
+            mutate(outcome=outcome_i, unit=unit_i)
+        )
+    }
+  }
+  
+  # Plot caterpillar plots
+  for(outcome_i in outcomes_binary){
+    for(unit_i in c("icu", "ward")){
+      
+      plot_data <- outcome_comparisons_raw |>
+        filter(outcome == outcome_i, unit == unit_i) |>
+        mutate(
+          # Orders hospitals from lowest to highest estimate
+          clif_hospital = fct_reorder(clif_hospital, estimate),
+          
+          imc_capable = factor(
+            imc_capable,
+            levels = c(0, 1),
+            labels = c("Not IMC-capable", "IMC-capable")
+          ),
+          
+          academic_community = factor(
+            academic_community,
+            levels = c("academic", "community"),
+            labels = c("Academic", "Community")
+          )
+        )
+      
+      # Set upper y-axis limit to a nice rounded value above the max upper CI
+      upper_lim <- ceiling(max(plot_data$upper_prob, na.rm = TRUE) / 0.05) * 0.05
+      
+      p <- ggplot(
+        plot_data,
+        aes(
+          x = clif_hospital,
+          y = estimate,
+          color = imc_capable
+        )
+      ) +
+        geom_errorbar(
+          aes(
+            ymin = lower_prob,
+            ymax = upper_prob
+          ),
+          width = 0,
+          linewidth = 0.6
+        ) +
+        geom_point(
+          aes(shape = academic_community),
+          size = 2.8
+        ) +
+        scale_y_continuous(
+          labels = label_percent(accuracy = 1),
+          limits = c(0, upper_lim),
+          expand = expansion(mult = c(0, 0.02))
+        ) +
+        scale_shape_manual(
+          values = c(
+            "Academic" = 16,
+            "Community" = 17
+          )
+        ) +
+        labs(
+          x = paste0("Hospital (", ifelse(unit_i=="icu", "ICU", "ward"),")"),
+          y = paste0("Estimated probability of ", 
+                     ifelse(outcome_i=="death_hospice", "death or hospice",
+                            "progressive organ failure")),
+          color = "IMC capability",
+          shape = "Hospital type"
+        ) +
+        theme_classic() +
+        theme(
+          axis.text.x = element_blank(),   # keeps hospitals unlabelled
+          axis.ticks.x = element_blank(),
+          legend.position = "right"
+        )
+      
+      ggsave(paste0(output_dir, paste0("caterpillar_", outcome_i, "_", unit_i, ".jpg")), 
+             plot=p, width=8, height=5, dpi=600)
+      
+    }
+  }
+
+} # Group by IMC capable vs incapable

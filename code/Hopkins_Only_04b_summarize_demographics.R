@@ -398,10 +398,52 @@ options(scipen = 999)
   write_csv(all_table_1_5group, paste0(output_dir, "table_1_5group.csv"))
   
   
-  rm(raw_table_1_3group_cat, raw_table_1_3group_cont, raw_table_1_5group_cat, raw_table_1_5group_cont,
+  rm(raw_table_1_3group_cat, raw_table_1_3group_cont, # raw_table_1_5group_cat,  # Keep this one because we use it later for hospital information
+     raw_table_1_5group_cont,
      all_table_1_3group_cat, all_table_1_3group_cat_display, all_table_1_3group_cont, all_table_1_3group_cont_display,
      all_table_1_5group_cat, all_table_1_5group_cat_display, all_table_1_5group_cont, all_table_1_5group_cont_display)
 } # Load and output table 1
+
+{ # Additional hospital information for table 1
+  hosp_info <- load_site_csv(site=sites[1], filename=paste0("hospital_data")) |> mutate(site=sites[1])
+  
+  for(site in sites[-1]){
+    hosp_info <- hosp_info |>
+      add_row(load_site_csv(site=site, filename=paste0("hospital_data")) |>
+                mutate(first_hospital_id = as.character (first_hospital_id)), site=site)
+  }
+  
+  table_1_hospital_info <- hosp_info |>
+    group_by(imc_capable) |>
+    summarise(n_hosp = n(), 
+              n_hosp_academic=sum(ifelse(academic_community=="academic", 1, 0)),
+              percent_hosp_academic = round(100*n_hosp_academic/n()),
+              percent_patients_academic = round(100*sum(ifelse(academic_community=="academic", 1, 0)*n_patients)/sum(n_patients)))
+  
+  table_1_academic_comm_by_pt <- raw_table_1_5group_cont |>
+    select(site, traige_location_imc_avail, n_patients_site_this_unit=n_age) |>
+    mutate(imc_capable = case_when(
+      traige_location_imc_avail == "IMC" ~ 1,
+      traige_location_imc_avail == "ICU (+)" ~ 1,
+      traige_location_imc_avail == "Ward (+)" ~ 1,
+      TRUE ~ 0
+      
+    )) |>
+    left_join(hosp_info |> select(site, first_hospital_id, academic_community, imc_capable, n_patients_hosp_all_units=n_patients), by=c("site", "imc_capable")) 
+  
+  # n row of this will be number of imc capable hospitails contributing imc data (since some imc capable == 0 hospitals only have icu data)
+  n_hosp_imc <- table_1_academic_comm_by_pt |>
+    filter(traige_location_imc_avail == "IMC")
+  
+  academic_comm_imc <- n_hosp_imc |>
+    summarize(
+      n_hosp_academic=sum(ifelse(academic_community=="academic", 1, 0)),
+      percent_hosp_academic = round(100*n_hosp_academic/n())
+    )
+  
+  
+  
+} # Additional hospital information for table 1
 
 write_csv(data.frame(
   N_ICU=N_ICU_TOTAL,
@@ -667,6 +709,8 @@ write_csv(data.frame(
   write_csv(all_table_2_5group, paste0(output_dir, "table_2_5group.csv"))
   
   # Statistical tests
+  
+  #
   # For binary outcomes
   run_chisq <- function(df, var_name){
     tab <- df |>
@@ -733,6 +777,80 @@ write_csv(data.frame(
   run_anova(all_table_2_5group_cont, "los")  
   run_anova(all_table_2_5group_cont, "days_off")
   
+  #### Pairwise comparisons
+  
+  # Contunous
+  # pull n / mean / sd for one variable & one group column
+  get_cont <- function(df, var, group_col) {
+    rows <- df[df$variable == var, ]
+    list(
+      n    = as.numeric(rows[rows$measure == "n",    group_col]),
+      mean = as.numeric(rows[rows$measure == "mean", group_col]),
+      sd   = as.numeric(rows[rows$measure == "sd",   group_col])
+    )
+  }
+  
+  # Welch t-test + Cohen's d, all from summary stats
+  welch_from_summary <- function(n1, m1, s1, n2, m2, s2) {
+    se <- sqrt(s1^2/n1 + s2^2/n2)
+    t  <- (m1 - m2) / se
+    df <- (s1^2/n1 + s2^2/n2)^2 /
+      ((s1^2/n1)^2/(n1 - 1) + (s2^2/n2)^2/(n2 - 1))
+    p  <- 2 * pt(-abs(t), df)
+    sp <- sqrt(((n1 - 1)*s1^2 + (n2 - 1)*s2^2) / (n1 + n2 - 2))  # pooled SD
+    data.frame(mean_pos = m1, mean_neg = m2, diff = m1 - m2,
+               t = t, df = df, p_value = p, cohens_d = (m1 - m2)/sp)
+  }
+  
+  compare_cont_stats <- function(df, var, gpos, gneg) {
+    a <- get_cont(df, var, gpos); b <- get_cont(df, var, gneg)
+    cbind(variable = var, comparison = paste(gpos, "vs", gneg),
+          welch_from_summary(a$n, a$mean, a$sd, b$n, b$mean, b$sd))
+  }
+  
+  cont_results_stats <- bind_rows(
+    compare_cont_stats(all_table_2_5group_cont, "los",      "ICU (+)",  "ICU (-)"),
+    compare_cont_stats(all_table_2_5group_cont, "los",      "Ward (+)", "Ward (-)"),
+    compare_cont_stats(all_table_2_5group_cont, "days_off", "ICU (+)",  "ICU (-)"),
+    compare_cont_stats(all_table_2_5group_cont, "days_off", "Ward (+)", "Ward (-)")
+  )
+  
+  # Categorical
+  compare_cat_stats <- function(df, var, gpos, gneg, test = c("chisq", "fisher")) {
+    test <- match.arg(test)
+    rows <- df[df$variable == var, ]
+    rows$measure <- as.character(rows$measure)   # handles 0/1 stored as num or chr
+    
+    pos0 <- as.numeric(rows[rows$measure == "0", gpos]); pos1 <- as.numeric(rows[rows$measure == "1", gpos])
+    neg0 <- as.numeric(rows[rows$measure == "0", gneg]); neg1 <- as.numeric(rows[rows$measure == "1", gneg])
+    
+    m <- matrix(c(pos0, pos1, neg0, neg1), nrow = 2,
+                dimnames = list(outcome = c("0", "1"), group = c(gpos, gneg)))
+    
+    ht   <- if (test == "chisq") chisq.test(m, correct = FALSE) else fisher.test(m)
+    stat <- if (test == "chisq") unname(ht$statistic) else NA_real_
+    
+    data.frame(
+      variable   = var,
+      comparison = paste(gpos, "vs", gneg),
+      prop_pos   = pos1 / (pos0 + pos1),      # event rate in + group
+      prop_neg   = neg1 / (neg0 + neg1),      # event rate in - group
+      odds_ratio = (pos1/pos0) / (neg1/neg0), # odds of event, + vs -
+      statistic  = stat,
+      p_value    = ht$p.value,
+      test       = test
+    )
+  }
+  
+  cat_results_stats <- bind_rows(
+    compare_cat_stats(all_table_2_5group_cat, "dh",            "ICU (+)",  "ICU (-)"),
+    compare_cat_stats(all_table_2_5group_cat, "dh",            "Ward (+)", "Ward (-)"),
+    compare_cat_stats(all_table_2_5group_cat, "organ_failure", "ICU (+)",  "ICU (-)"),
+    compare_cat_stats(all_table_2_5group_cat, "organ_failure", "Ward (+)", "Ward (-)"),
+    compare_cat_stats(all_table_2_5group_cat, "was_escalated", "Ward (+)", "Ward (-)")  # ward only
+  )
+  
+  
   # Clean space
   rm(raw_table_2_3group_cat, raw_table_2_3group_cont, raw_table_2_5group_cat, raw_table_2_5group_cont,
      all_table_2_3group_cat, all_table_2_3group_cat_display, all_table_2_3group_cont, all_table_2_3group_cont_display,
@@ -782,7 +900,7 @@ write_csv(data.frame(
   
   hosp_info_tab_long <- fig_1a_data |>
     select(-site) |>
-    arrange(-pct_ICU) |>
+    arrange(-pct_ICU, desc(x_axis_label), n_total) |>
     select(hospital, x_axis_label, ICU, IMC, Ward, n_total) |>
     pivot_longer(
       cols = c(ICU, IMC, Ward),
@@ -858,7 +976,9 @@ write_csv(data.frame(
   fig_1a <- make_fig_1_plot(hosp_info_tab_long)
   fig_1a
   
-  hosp_hist_order <- unique(hosp_info_tab_long$hospital)
+  hosp_hist_order <- unique(hosp_info_tab_long|>
+    pull(hospital))
+  
   fig_1a_extra <- make_fig_1_plot(hosp_info_tab_long|>
                                     group_by(hospital)|>
                                     summarize(
@@ -873,8 +993,8 @@ write_csv(data.frame(
                                   y_val="n",
                                   fill="All"
                                   )
-  fig_1a_extra
-  fig_1a/fig_1a_extra+plot_layout(heights=c(5,1))
+  #fig_1a_extra
+  fig_1a/fig_1a_extra+plot_layout(heights=c(3.5,2.5))
   
   fig_1b <- make_fig_1_plot(hosp_info_tab_long, y_val="n")
   fig_1b
@@ -883,7 +1003,7 @@ write_csv(data.frame(
   ggsave(paste0(output_dir, "fig_1a.jpg"), 
          plot=fig_1a, width=8, height=5, dpi=600)
   ggsave(paste0(output_dir, "fig_1a_with_counts.jpg"), 
-         plot=(fig_1a/fig_1a_extra+plot_layout(heights=c(5,1))), width=8, height=7, dpi=600)
+         plot=(fig_1a/fig_1a_extra+plot_layout(heights=c(3.5,2.5))), width=8, height=7, dpi=600)
   ggsave(paste0(output_dir, "fig_1b.jpg"), 
          plot=fig_1b, width=8, height=5, dpi=600)
   
