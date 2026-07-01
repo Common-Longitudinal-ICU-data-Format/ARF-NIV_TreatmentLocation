@@ -297,3 +297,33 @@ units_all <- c("icu", "ward", "stepdown")
   cat("Run successfully!\n")
   
 } # Calculate event rate
+
+{ # Get unadjusted outcomes for secondary analysis
+  if(site %in% c("Hopkins", "UMN", "OHSU")){
+    secondary_cohort <- final_cohort |>
+      filter(imc_capable == 1)
+    
+    unadj_outcomes_secondary <- data.frame(
+      site=character(),
+      outcome=character(),
+      outcome_val = factor(),
+      n_patients=numeric(),
+      stringsAsFactors = F
+    )
+    
+    unadj_outcomes_secondary <- unadj_outcomes_secondary|>
+      add_row(
+        as.data.frame(table(secondary_cohort$death_hospice)) |>
+          mutate(site=site,outcome="death_hospice") |>
+          select(site, outcome, outcome_val=Var1, n_patients=Freq)
+      ) |>
+      add_row(
+        as.data.frame(table(secondary_cohort$organ_failure_yn))|>
+          mutate(site=site,outcome="organ_failure_yn") |>
+          select(site, outcome, outcome_val=Var1, n_patients=Freq)
+      )
+
+    write.csv(unadj_outcomes_secondary, paste0(model_out_dir,"/",site,"_unadj_outcomes_secondary.csv"))
+    
+  }
+} # Get unadjusted outcomes for secondary analysis

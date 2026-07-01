@@ -613,9 +613,158 @@ for(outcome_i in outcomes_binary){
       n_hosp = n_hosp_icu + n_hosp_stepdown
     )
   
-  
-  
 } # Secondary analysis; IMC vs ICU
+
+{ # Secondary analysis; forest plots
+  
+  make_forest_secondary <- function(df, outcome_key, outcome_title) {
+    
+    d <- df[df$outcome == outcome_key, ]
+    
+    # d$unit <- factor(d$unit, levels = c("ward", "icu"),
+    #                  labels = c("Ward", "ICU"))
+    
+    d$lab <- sprintf("%+.1f pp  (95%% CI %+.1f to %+.1f),  p = %.3f",
+                     d$rd_pp, d$lcl_pp, d$ucl_pp, d$p_value)
+    
+    xmax  <- max(abs(c(d$lcl_pp, d$ucl_pp))) + 1
+    xpad  <- xmax + 0.5
+    x_lo  <- -xmax
+    x_hi  <- xpad + xmax * 1.6
+    
+    y_arrow <- 0.55
+    y_label <- 0.20
+    
+    # --- Arrow geometry: explicit, equal-length, near each panel edge ---
+    arrow_len <- xmax * 0.45          # length of each arrow (half of before)
+    edge_pad  <- xmax * 0.10          # gap between arrow tip and panel edge
+    
+    left_out  <- x_lo + edge_pad                 # left arrow tip (points left, to edge)
+    left_in   <- left_out + arrow_len            # left arrow tail (toward center)
+    right_out <- x_hi - edge_pad                 # right arrow tip (points right, to edge)
+    right_in  <- right_out - arrow_len           # right arrow tail (toward center)
+    
+    ggplot(d, aes(x = rd_pp, y = outcome)) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+      geom_errorbarh(aes(xmin = lcl_pp, xmax = ucl_pp), height = 0.15, linewidth = 0.7) +
+      geom_point(aes(size = n_hosp), shape = 15, color = "#2c3e50") +
+      geom_text(aes(x = xpad, label = lab), hjust = 0, size = 3.4) +
+      
+      # Equal-length arrows, one near each edge
+      annotate("segment", x = left_in, xend = left_out, y = y_arrow, yend = y_arrow,
+               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
+      annotate("segment", x = right_in, xend = right_out, y = y_arrow, yend = y_arrow,
+               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
+      annotate("text", x = (left_in + left_out) / 2, y = y_label,
+               label = "Favors ICU", size = 3.1, color = "grey30") +
+      annotate("text", x = (right_in + right_out) / 2, y = y_label,
+               label = "Favors IMC", size = 3.1, color = "grey30") +
+      
+      scale_size_continuous(range = c(3, 6), guide = "none") +
+      scale_x_continuous(limits = c(x_lo, x_hi), breaks = scales::pretty_breaks(5)) +
+      scale_y_discrete(expand = expansion(add = c(1.1, 0.6))) +
+      labs(
+        title = outcome_title,
+        x = "Risk difference (percentage points)",
+        y = NULL
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        plot.title         = element_text(face = "bold", hjust = 0.5),
+        panel.grid.major.y = element_blank(),
+        axis.text.y        = element_blank(),
+        plot.background    = element_rect(fill = "white", color = NA),
+        panel.background   = element_rect(fill = "white", color = NA)
+      )
+  }
+  
+  p_death_secondary <- make_forest_secondary(secondary_results, "death_hospice",    "Death or Discharge to Hospice")
+  p_organ_secondary <- make_forest_secondary(secondary_results, "organ_failure_yn", "Progressive Organ Failure")
+  
+  ggsave(paste0(output_dir, "forest_death_hospice_secondary.png"), p_death_secondary, width = 9, height = 3.4, dpi = 300)
+  ggsave(paste0(output_dir, "forest_organ_failure_secondary.png"), p_organ_secondary, width = 9, height = 3.4, dpi = 300)
+  
+  p_death_secondary
+  p_organ_secondary
+  
+} # Secondary analysis; forest plots
+
+{ # Results text
+  # outcome_temp <- "death_hospice"
+  # unit_temp <- "ward"
+  
+  temp_df <- data.frame(
+    outcome=character(),
+    unit=character(),
+    capable_comp=character(),
+    incapable_comp=character(),
+    risk_diff = character(),
+    stringsAsFactors = F
+  )
+  
+  temp_df_secondary <- data.frame(
+    outcome=character(),
+    icu_comp=character(),
+    imc_comp=character(),
+    risk_diff = character(),
+    stringsAsFactors = F
+  )
+  
+  for(outcome_temp in c("death_hospice", "organ_failure_yn"))
+  {
+    for(unit_temp in c("icu", "ward"))
+    {
+      temp_df <- temp_df |>
+        add_row(results |>
+                  filter(outcome==outcome_temp, unit==unit_temp) |>
+                  mutate(
+                    capable_comp = paste0(round(100*estimate_group_capable, 1), "% [95% CI ",
+                                          round(100*estimate_group_capable - 100*se_group_capable, 1), "% to ",
+                                          round(100*estimate_group_capable + 100*se_group_capable, 1), "%]"),
+                    incapable_comp = paste0(round(100*estimate_group_incapable, 1), "% [95% CI ",
+                                            round(100*estimate_group_incapable - 100*se_group_incapable, 1), "% to ",
+                                            round(100*estimate_group_incapable + 100*se_group_incapable, 1), "%]"),
+                    risk_diff = paste0(
+                      round(rd_pp,1), " percentage points [95% CI ", round(lcl_pp,1),
+                      " percentage points to ", round(ucl_pp,1), 
+                      " percentage points, p = ", round(p_value,3),"]"
+                    )
+                  ) |>
+                  select(
+                    outcome,
+                    unit,
+                    capable_comp,
+                    incapable_comp,
+                    risk_diff
+                  )
+        )
+    }
+    
+    temp_df_secondary <- temp_df_secondary |>
+      add_row(secondary_results |>
+                filter(outcome==outcome_temp) |>
+                mutate(
+                  icu_comp = paste0(round(100*estimate_group_icu, 1), "% [95% CI ",
+                                        round(100*estimate_group_icu - 100*se_group_icu, 1), "% to ",
+                                        round(100*estimate_group_icu + 100*se_group_icu, 1), "%]"),
+                  imc_comp = paste0(round(100*estimate_group_stepdown, 1), "% [95% CI ",
+                                          round(100*estimate_group_stepdown - 100*se_group_stepdown, 1), "% to ",
+                                          round(100*estimate_group_stepdown + 100*se_group_stepdown, 1), "%]"),
+                  risk_diff = paste0(
+                    round(rd_pp,1), " percentage points [95% CI ", round(lcl_pp,1),
+                    " percentage points to ", round(ucl_pp,1), 
+                    " percentage points, p = ", round(p_value,3),"]"
+                  )
+                ) |>
+                select(
+                  outcome,
+                  icu_comp,
+                  imc_comp,
+                  risk_diff
+                )
+      )
+  }
+} # Results text
 
 ### ### ### ### ### ### ### ### ### 
 ### ### ### ### OLD ### ### ### ### 
@@ -699,83 +848,4 @@ for(outcome_i in outcomes_binary){
   print(results, row.names = FALSE)
 
 } # Group by IMC capable vs incapable
-
-{ # plot forest plots
-  
-  
-  library(ggplot2)
-  
-  # `results` = your table; output_dir <- "/your/path/"  (end with a slash)
-  
-  make_forest <- function(df, outcome_key, outcome_title) {
-    
-    d <- df[df$outcome == outcome_key, ]
-    
-    d$unit <- factor(d$unit, levels = c("ward", "icu"),
-                     labels = c("Ward", "ICU"))
-    
-    d$lab <- sprintf("%+.1f pp  (95%% CI %+.1f to %+.1f),  p = %.3f",
-                     d$rd_pp, d$lcl_pp, d$ucl_pp, d$p_value)
-    
-    xmax  <- max(abs(c(d$lcl_pp, d$ucl_pp))) + 1
-    xpad  <- xmax + 0.5
-    x_lo  <- -xmax
-    x_hi  <- xpad + xmax * 1.6
-    
-    y_arrow <- 0.55
-    y_label <- 0.20
-    
-    # --- Arrow geometry: explicit, equal-length, near each panel edge ---
-    arrow_len <- xmax * 0.45          # length of each arrow (half of before)
-    edge_pad  <- xmax * 0.10          # gap between arrow tip and panel edge
-    
-    left_out  <- x_lo + edge_pad                 # left arrow tip (points left, to edge)
-    left_in   <- left_out + arrow_len            # left arrow tail (toward center)
-    right_out <- x_hi - edge_pad                 # right arrow tip (points right, to edge)
-    right_in  <- right_out - arrow_len           # right arrow tail (toward center)
-    
-    ggplot(d, aes(x = rd_pp, y = unit)) +
-      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
-      geom_errorbarh(aes(xmin = lcl_pp, xmax = ucl_pp), height = 0.15, linewidth = 0.7) +
-      geom_point(aes(size = n_hosp), shape = 15, color = "#2c3e50") +
-      geom_text(aes(x = xpad, label = lab), hjust = 0, size = 3.4) +
-      
-      # Equal-length arrows, one near each edge
-      annotate("segment", x = left_in, xend = left_out, y = y_arrow, yend = y_arrow,
-               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
-      annotate("segment", x = right_in, xend = right_out, y = y_arrow, yend = y_arrow,
-               arrow = arrow(length = unit(0.18, "cm")), color = "grey40") +
-      annotate("text", x = (left_in + left_out) / 2, y = y_label,
-               label = "Favors IMC-capable", size = 3.1, color = "grey30") +
-      annotate("text", x = (right_in + right_out) / 2, y = y_label,
-               label = "Favors non-capable", size = 3.1, color = "grey30") +
-      
-      scale_size_continuous(range = c(3, 6), guide = "none") +
-      scale_x_continuous(limits = c(x_lo, x_hi), breaks = scales::pretty_breaks(5)) +
-      scale_y_discrete(expand = expansion(add = c(1.1, 0.6))) +
-      labs(
-        title = outcome_title,
-        x = "Risk difference (percentage points)",
-        y = NULL
-      ) +
-      theme_minimal(base_size = 12) +
-      theme(
-        plot.title         = element_text(face = "bold", hjust = 0.5),
-        panel.grid.major.y = element_blank(),
-        axis.text.y        = element_text(face = "bold"),
-        plot.background    = element_rect(fill = "white", color = NA),
-        panel.background   = element_rect(fill = "white", color = NA)
-      )
-  }
-  
-  p_death <- make_forest(results, "death_hospice",    "Death or Discharge to Hospice")
-  p_organ <- make_forest(results, "organ_failure_yn", "Progressive Organ Failure")
-  
-  ggsave(paste0(output_dir, "forest_death_hospice.png"), p_death, width = 9, height = 3.4, dpi = 300)
-  ggsave(paste0(output_dir, "forest_organ_failure.png"), p_organ, width = 9, height = 3.4, dpi = 300)
-  
-  p_death
-  p_organ
-  
-} # plot forest plots
 
